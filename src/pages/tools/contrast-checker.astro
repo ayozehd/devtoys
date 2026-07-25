@@ -1,0 +1,411 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+---
+
+<ToolLayout slug="contrast-checker">
+  <div class="grid-2">
+    <section class="card card-pad">
+      <div class="field">
+        <label class="label" for="fg-text">Foreground / text</label>
+        <div class="row">
+          <input type="color" id="fg" class="native" value="#59636e" />
+          <input type="text" id="fg-text" class="input mono" value="#59636e" spellcheck="false" />
+        </div>
+      </div>
+      <div class="field gap">
+        <label class="label" for="bg-text">Background</label>
+        <div class="row">
+          <input type="color" id="bg" class="native" value="#ffffff" />
+          <input type="text" id="bg-text" class="input mono" value="#ffffff" spellcheck="false" />
+        </div>
+      </div>
+      <div class="row gap">
+        <button type="button" class="btn btn-sm" id="swap">Swap</button>
+        <button type="button" class="btn btn-sm" id="fix-fg">Fix foreground</button>
+        <button type="button" class="btn btn-sm" id="fix-bg">Fix background</button>
+      </div>
+      <p class="hint gap">
+        “Fix” nudges lightness until the pair reaches AA for normal text (4.5:1), keeping the hue.
+      </p>
+    </section>
+
+    <section class="card ratio-card">
+      <div class="ratio" id="ratio-box">
+        <strong id="ratio">4.62</strong>
+        <span>contrast ratio</span>
+      </div>
+      <div class="verdicts" id="verdicts"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Preview</span>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="bold" /><span>Bold</span></label>
+      </div>
+    </div>
+    <div class="preview" id="preview">
+      <p class="sample s-12">12px — The quick brown fox jumps over the lazy dog.</p>
+      <p class="sample s-14">14px — The quick brown fox jumps over the lazy dog.</p>
+      <p class="sample s-16">16px — Normal body text at the default size.</p>
+      <p class="sample s-18">18.66px — Large text threshold when bold.</p>
+      <p class="sample s-24">24px — Large text: headings and callouts.</p>
+      <p class="sample s-32">32px — Display heading</p>
+      <div class="ui-row">
+        <button type="button" class="fake-btn" id="fake-btn">Primary action</button>
+        <a href="#preview" class="fake-link" id="fake-link">An inline link</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">WCAG thresholds</span></div>
+    <div class="table-wrap">
+      <table class="data" id="matrix">
+        <thead>
+          <tr>
+            <th>Content</th>
+            <th>Level AA</th>
+            <th>Level AAA</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">Suggested accessible pairs</span></div>
+    <div class="card-pad">
+      <div class="suggestions" id="suggestions"></div>
+    </div>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, esc, live } from '../../lib/dom';
+  import {
+    BLACK,
+    WHITE,
+    contrastRatio,
+    hslToRgb,
+    mix,
+    parseColor,
+    rgbToHex,
+    rgbToHsl,
+    type RGB,
+  } from '../../lib/color';
+
+  const fgEl = $<HTMLInputElement>('#fg');
+  const bgEl = $<HTMLInputElement>('#bg');
+  const fgText = $<HTMLInputElement>('#fg-text');
+  const bgText = $<HTMLInputElement>('#bg-text');
+  const boldEl = $<HTMLInputElement>('#bold');
+  const previewEl = $('#preview');
+
+  let fg: RGB = { r: 89, g: 99, b: 110, a: 1 };
+  let bg: RGB = WHITE;
+
+  const THRESHOLDS: { label: string; aa: number; aaa: number }[] = [
+    { label: 'Body text (< 18.66px bold / < 24px)', aa: 4.5, aaa: 7 },
+    { label: 'Large text (≥ 18.66px bold / ≥ 24px)', aa: 3, aaa: 4.5 },
+    { label: 'UI components & graphics', aa: 3, aaa: 3 },
+  ];
+
+  function badge(ratio: number, threshold: number, label: string) {
+    const pass = ratio >= threshold;
+    return `<span class="badge ${pass ? 'badge-success' : 'badge-danger'}">${pass ? '✓' : '✕'} ${label} ${threshold}:1</span>`;
+  }
+
+  /** Walks lightness up and down until the pair clears `target`. */
+  function findPassing(color: RGB, against: RGB, target = 4.5): RGB {
+    const hsl = rgbToHsl(color);
+    let best = color;
+    let bestRatio = contrastRatio(color, against);
+
+    for (let step = 1; step <= 100; step++) {
+      for (const direction of [-1, 1]) {
+        const l = hsl.l + direction * step;
+        if (l < 0 || l > 100) continue;
+        const candidate = hslToRgb({ ...hsl, l });
+        const ratio = contrastRatio(candidate, against);
+        if (ratio >= target) return candidate;
+        if (ratio > bestRatio) {
+          bestRatio = ratio;
+          best = candidate;
+        }
+      }
+    }
+    return best;
+  }
+
+  function renderSuggestions(ratio: number) {
+    const options: { label: string; fg: RGB; bg: RGB }[] = [
+      { label: 'Darkened text', fg: findPassing(fg, bg, 4.5), bg },
+      { label: 'Lightened background', fg, bg: findPassing(bg, fg, 4.5) },
+      { label: 'AAA text', fg: findPassing(fg, bg, 7), bg },
+      { label: 'Black on background', fg: BLACK, bg },
+      { label: 'White on foreground', fg: WHITE, bg: fg },
+      { label: 'Tinted surface', fg, bg: mix(bg, fg, 0.08) },
+    ];
+
+    $('#suggestions').innerHTML = options
+      .map(({ label, fg: f, bg: b }) => {
+        const r = contrastRatio(f, b);
+        const cls = r >= 7 ? 'badge-success' : r >= 4.5 ? 'badge-accent' : r >= 3 ? 'badge-attention' : 'badge-danger';
+        return `<button type="button" class="suggestion" data-fg="${rgbToHex(f)}" data-bg="${rgbToHex(b)}" style="background:${rgbToHex(b)};color:${rgbToHex(f)}">
+          <span class="s-title">${esc(label)}</span>
+          <span class="s-demo">Aa — sample text</span>
+          <span class="s-meta"><span class="badge ${cls}">${r.toFixed(2)}:1</span> <code>${rgbToHex(f).toUpperCase()} on ${rgbToHex(b).toUpperCase()}</code></span>
+        </button>`;
+      })
+      .join('');
+
+    void ratio;
+  }
+
+  function render() {
+    const ratio = contrastRatio(fg, bg);
+    const fgHex = rgbToHex(fg);
+    const bgHex = rgbToHex(bg);
+
+    $('#ratio').textContent = `${ratio.toFixed(2)}`;
+    const box = $('#ratio-box');
+    box.style.background = bgHex;
+    box.style.color = fgHex;
+
+    $('#verdicts').innerHTML = [
+      badge(ratio, 4.5, 'AA'),
+      badge(ratio, 3, 'AA large'),
+      badge(ratio, 7, 'AAA'),
+      badge(ratio, 4.5, 'AAA large'),
+    ].join('');
+
+    previewEl.style.background = bgHex;
+    previewEl.style.color = fgHex;
+    previewEl.style.fontWeight = boldEl.checked ? '700' : '400';
+    $('#fake-btn').style.cssText = `background:${fgHex};color:${bgHex};`;
+    $('#fake-link').style.color = fgHex;
+
+    $('#matrix tbody').innerHTML = THRESHOLDS.map(({ label, aa, aaa }) => {
+      const cell = (t: number) => {
+        const pass = ratio >= t;
+        return `<td><span class="badge ${pass ? 'badge-success' : 'badge-danger'}">${pass ? 'Pass' : 'Fail'}</span> <span class="dim mono">needs ${t}:1</span></td>`;
+      };
+      return `<tr><td>${esc(label)}</td>${cell(aa)}${cell(aaa)}</tr>`;
+    }).join('');
+
+    renderSuggestions(ratio);
+  }
+
+  function setColor(which: 'fg' | 'bg', value: string, from: 'picker' | 'text') {
+    const parsed = parseColor(value);
+    const textEl = which === 'fg' ? fgText : bgText;
+    textEl.classList.toggle('is-invalid', !parsed);
+    if (!parsed) return;
+
+    const solid = { ...parsed, a: 1 };
+    if (which === 'fg') fg = solid;
+    else bg = solid;
+
+    const hex = rgbToHex(solid);
+    if (from === 'text') (which === 'fg' ? fgEl : bgEl).value = hex;
+    else textEl.value = hex;
+    render();
+  }
+
+  fgEl.addEventListener('input', () => setColor('fg', fgEl.value, 'picker'));
+  bgEl.addEventListener('input', () => setColor('bg', bgEl.value, 'picker'));
+  fgText.addEventListener('input', () => setColor('fg', fgText.value, 'text'));
+  bgText.addEventListener('input', () => setColor('bg', bgText.value, 'text'));
+
+  $('#swap').addEventListener('click', () => {
+    const tmp = fg;
+    fg = bg;
+    bg = tmp;
+    fgEl.value = fgText.value = rgbToHex(fg);
+    bgEl.value = bgText.value = rgbToHex(bg);
+    render();
+  });
+
+  $('#fix-fg').addEventListener('click', () => {
+    fg = findPassing(fg, bg);
+    fgEl.value = fgText.value = rgbToHex(fg);
+    render();
+  });
+
+  $('#fix-bg').addEventListener('click', () => {
+    bg = findPassing(bg, fg);
+    bgEl.value = bgText.value = rgbToHex(bg);
+    render();
+  });
+
+  $('#suggestions').addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLElement>('.suggestion');
+    if (!btn) return;
+    setColor('fg', btn.dataset.fg ?? '', 'text');
+    setColor('bg', btn.dataset.bg ?? '', 'text');
+  });
+
+  live([boldEl], render);
+</script>
+
+<style>
+  .native {
+    width: 46px;
+    height: 32px;
+    padding: 2px;
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .row .input {
+    flex: 1;
+    min-width: 120px;
+  }
+
+  .gap {
+    margin-top: 14px;
+  }
+
+  .ratio-card {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .ratio {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    flex: 1;
+    min-height: 150px;
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ratio strong {
+    font-family: var(--font-mono);
+    font-size: 44px;
+    line-height: 1;
+    font-weight: 600;
+  }
+
+  .ratio span {
+    font-size: 12px;
+    opacity: 0.75;
+  }
+
+  .verdicts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 12px 16px;
+  }
+
+  .preview {
+    padding: 22px;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+
+  .sample {
+    margin: 0 0 10px;
+  }
+
+  .s-12 {
+    font-size: 12px;
+  }
+  .s-14 {
+    font-size: 14px;
+  }
+  .s-16 {
+    font-size: 16px;
+  }
+  .s-18 {
+    font-size: 18.66px;
+  }
+  .s-24 {
+    font-size: 24px;
+  }
+  .s-32 {
+    font-size: 32px;
+    font-weight: 600;
+  }
+
+  .ui-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+
+  .fake-btn {
+    padding: 7px 16px;
+    font: inherit;
+    font-size: 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .fake-link {
+    text-decoration: underline;
+    font-size: 14px;
+  }
+
+  .suggestions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 10px;
+  }
+
+  .suggestions :global(.suggestion) {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px;
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font: inherit;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+  }
+
+  .suggestions :global(.suggestion:hover) {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+
+  .suggestions :global(.s-title) {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.75;
+  }
+
+  .suggestions :global(.s-demo) {
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  .suggestions :global(.s-meta) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .suggestions :global(.s-meta code) {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    opacity: 0.8;
+  }
+</style>

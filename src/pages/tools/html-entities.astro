@@ -1,0 +1,302 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import CopyButton from '../../components/CopyButton.astro';
+
+const SAMPLE = `<div class="note" onclick="steal()">
+  <p>Tom &amp; Jerry — 5 &lt; 10 &copy; 2024</p>
+  <script>alert('xss')<\/script>
+  <a href="javascript:alert(1)">click me</a>
+  <img src=x onerror="alert(1)">
+</div>`;
+---
+
+<ToolLayout slug="html-entities">
+  <section class="card card-pad">
+    <div class="toolbar">
+      <div class="segmented" id="mode">
+        <button type="button" data-value="encode" aria-selected="true">Encode</button>
+        <button type="button" data-value="decode">Decode</button>
+        <button type="button" data-value="sanitize">Sanitise</button>
+      </div>
+      <label class="check" id="opt-all">
+        <input type="checkbox" id="encode-all" />
+        <span>Encode every non-ASCII character</span>
+      </label>
+      <label class="check" id="opt-named">
+        <input type="checkbox" id="named" checked />
+        <span>Prefer named entities</span>
+      </label>
+    </div>
+    <p class="hint mode-hint" id="mode-hint"></p>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Input</span>
+        <button type="button" class="btn btn-sm" id="sample">Load sample</button>
+      </div>
+      <div class="card-pad">
+        <textarea id="input" class="textarea" rows="12" spellcheck="false">{SAMPLE}</textarea>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Output</span>
+        <CopyButton target="output" />
+      </div>
+      <div class="card-pad">
+        <textarea id="output" class="textarea" rows="12" spellcheck="false" readonly></textarea>
+      </div>
+    </section>
+  </div>
+
+  <section class="card" id="report-card" hidden>
+    <div class="card-head">
+      <span class="card-title">Sanitiser report</span>
+      <span class="badge badge-neutral" id="removed-count">0 removed</span>
+    </div>
+    <div class="card-pad">
+      <p class="hint">
+        Sanitising strips scripts, event handlers and dangerous URLs while keeping formatting
+        markup. Powered by DOMPurify, running entirely in this tab.
+      </p>
+      <ul class="removed" id="removed"></ul>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Rendered preview</span>
+      <span class="badge badge-attention">Sanitised before display</span>
+    </div>
+    <div class="preview" id="preview"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">Common entities</span></div>
+    <div class="table-wrap">
+      <table class="data" id="reference"></table>
+    </div>
+  </section>
+</ToolLayout>
+
+<script>
+  import DOMPurify from 'dompurify';
+  import { $, esc, live, segmented } from '../../lib/dom';
+
+  const inputEl = $<HTMLTextAreaElement>('#input');
+  const outputEl = $<HTMLTextAreaElement>('#output');
+  const allEl = $<HTMLInputElement>('#encode-all');
+  const namedEl = $<HTMLInputElement>('#named');
+  const previewEl = $('#preview');
+  const hintEl = $('#mode-hint');
+
+  const SAMPLE = inputEl.value;
+  let mode = 'encode';
+
+  const NAMED: Record<string, string> = {
+    '&': 'amp',
+    '<': 'lt',
+    '>': 'gt',
+    '"': 'quot',
+    "'": 'apos',
+    '\u00a0': 'nbsp',
+    '©': 'copy',
+    '®': 'reg',
+    '™': 'trade',
+    '€': 'euro',
+    '£': 'pound',
+    '¥': 'yen',
+    '¢': 'cent',
+    '§': 'sect',
+    '¶': 'para',
+    '†': 'dagger',
+    '•': 'bull',
+    '…': 'hellip',
+    '—': 'mdash',
+    '–': 'ndash',
+    '‘': 'lsquo',
+    '’': 'rsquo',
+    '“': 'ldquo',
+    '”': 'rdquo',
+    '«': 'laquo',
+    '»': 'raquo',
+    '×': 'times',
+    '÷': 'divide',
+    '±': 'plusmn',
+    '°': 'deg',
+    'µ': 'micro',
+    '¼': 'frac14',
+    '½': 'frac12',
+    '¾': 'frac34',
+    '←': 'larr',
+    '→': 'rarr',
+    '↑': 'uarr',
+    '↓': 'darr',
+    '⇒': 'rArr',
+    '∞': 'infin',
+    '≠': 'ne',
+    '≤': 'le',
+    '≥': 'ge',
+    '≈': 'asymp',
+    '√': 'radic',
+    'α': 'alpha',
+    'β': 'beta',
+    'π': 'pi',
+    'Ω': 'Omega',
+  };
+
+  function encodeEntities(text: string): string {
+    const chars = [...text];
+    return chars
+      .map((ch) => {
+        const code = ch.codePointAt(0)!;
+        const named = namedEl.checked ? NAMED[ch] : undefined;
+        const mustEscape = ch === '&' || ch === '<' || ch === '>' || ch === '"' || ch === "'";
+
+        if (mustEscape) return named ? `&${named};` : `&#${code};`;
+        if (allEl.checked && code > 126) return named ? `&${named};` : `&#${code};`;
+        if (named && code > 126) return `&${named};`;
+        return ch;
+      })
+      .join('');
+  }
+
+  /** Decoding via the parser handles every named entity the browser knows. */
+  function decodeEntities(text: string): string {
+    const doc = new DOMParser().parseFromString(`<!doctype html><body>${text}`, 'text/html');
+    return doc.body.textContent ?? '';
+  }
+
+  const removed: string[] = [];
+
+  DOMPurify.addHook('uponSanitizeElement', (_node, data) => {
+    if (data.tagName && !data.allowedTags[data.tagName] && data.tagName !== '#text') {
+      removed.push(`<${data.tagName}> element`);
+    }
+  });
+
+  DOMPurify.addHook('uponSanitizeAttribute', (_node, data) => {
+    if (!data.forceKeepAttr && data.attrName && !data.keepAttr) {
+      removed.push(`${data.attrName}="${String(data.attrValue).slice(0, 40)}" attribute`);
+    }
+  });
+
+  function sanitize(html: string): string {
+    removed.length = 0;
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, KEEP_CONTENT: true });
+  }
+
+  function run() {
+    const text = inputEl.value;
+
+    $('#opt-all').hidden = mode !== 'encode';
+    $('#opt-named').hidden = mode !== 'encode';
+    $('#report-card').hidden = mode !== 'sanitize';
+
+    hintEl.textContent =
+      mode === 'encode'
+        ? 'Turns characters into HTML entities so markup renders as literal text.'
+        : mode === 'decode'
+          ? 'Turns entities such as &amp;copy; back into the characters they represent.'
+          : 'Removes scripts, inline event handlers and unsafe URLs from untrusted HTML.';
+
+    if (mode === 'encode') {
+      outputEl.value = encodeEntities(text);
+    } else if (mode === 'decode') {
+      outputEl.value = decodeEntities(text);
+    } else {
+      const clean = sanitize(text);
+      outputEl.value = clean;
+      const unique = [...new Set(removed)];
+      $('#removed-count').textContent = `${unique.length} removed`;
+      $('#removed-count').className = unique.length ? 'badge badge-danger' : 'badge badge-success';
+      $('#removed').innerHTML = unique.length
+        ? unique.map((r) => `<li><code>${esc(r)}</code></li>`).join('')
+        : '<li class="dim">Nothing had to be removed — the markup is already safe.</li>';
+    }
+
+    // The preview always renders the sanitised form of whatever is on screen.
+    previewEl.innerHTML = sanitize(mode === 'encode' ? text : outputEl.value);
+  }
+
+  segmented($('#mode'), (value) => {
+    mode = value;
+    run();
+  });
+
+  $('#sample').addEventListener('click', () => {
+    inputEl.value = SAMPLE;
+    run();
+  });
+
+  const rows = Object.entries(NAMED).slice(0, 48);
+  $('#reference').innerHTML = `<thead><tr><th>Char</th><th>Named</th><th>Numeric</th><th></th></tr></thead><tbody>${rows
+    .map(([ch, name]) => {
+      const numeric = `&#${ch.codePointAt(0)};`;
+      const entity = `&${name};`;
+      return `<tr>
+        <td class="glyph">${esc(ch)}</td>
+        <td class="mono">${esc(entity)}</td>
+        <td class="mono">${esc(numeric)}</td>
+        <td class="right"><button type="button" class="btn btn-sm" data-copy-value="${esc(entity)}">Copy</button></td>
+      </tr>`;
+    })
+    .join('')}</tbody>`;
+
+  live([inputEl, allEl, namedEl], run);
+</script>
+
+<style>
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .mode-hint {
+    margin-top: 10px;
+  }
+
+  .preview {
+    padding: 16px;
+    max-height: 320px;
+    overflow: auto;
+    background: var(--canvas-subtle);
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+  }
+
+  .preview :global(*) {
+    max-width: 100%;
+  }
+
+  .removed {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 10px;
+    font-size: 13px;
+  }
+
+  .removed :global(code) {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 1px 5px;
+    background: var(--danger-subtle);
+    color: var(--danger-fg);
+    border-radius: 4px;
+  }
+
+  #reference :global(.glyph) {
+    font-size: 17px;
+    width: 60px;
+  }
+
+  #reference :global(.right) {
+    text-align: right;
+    width: 1%;
+  }
+</style>

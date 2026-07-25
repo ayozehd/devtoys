@@ -1,0 +1,247 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+---
+
+<ToolLayout slug="case-converter">
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Input</span>
+      <div class="row">
+        <span class="badge badge-neutral" id="stats">0 chars</span>
+        <button type="button" class="btn btn-sm" id="clear">Clear</button>
+      </div>
+    </div>
+    <div class="card-pad stack">
+      <textarea id="input" class="textarea" rows="5" spellcheck="false"
+        >Hello World — this is DevToys 2.0!</textarea
+      >
+      <label class="check">
+        <input type="checkbox" id="strip-accents" />
+        <span>Strip accents / diacritics (café → cafe)</span>
+      </label>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">Cases</span></div>
+    <div id="cases" class="cases"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">Line operations</span></div>
+    <div class="card-pad stack">
+      <div class="row">
+        <button type="button" class="btn btn-sm js-op" data-op="sort">Sort A→Z</button>
+        <button type="button" class="btn btn-sm js-op" data-op="sortdesc">Sort Z→A</button>
+        <button type="button" class="btn btn-sm js-op" data-op="unique">Unique</button>
+        <button type="button" class="btn btn-sm js-op" data-op="reverse">Reverse order</button>
+        <button type="button" class="btn btn-sm js-op" data-op="shuffle">Shuffle</button>
+        <button type="button" class="btn btn-sm js-op" data-op="trim">Trim each line</button>
+        <button type="button" class="btn btn-sm js-op" data-op="dropblank">Remove blanks</button>
+        <button type="button" class="btn btn-sm js-op" data-op="number">Number lines</button>
+        <button type="button" class="btn btn-sm js-op" data-op="reversechars">Reverse text</button>
+        <button type="button" class="btn btn-sm js-op" data-op="dedupespace">Collapse spaces</button>
+      </div>
+      <div class="row line-out-head">
+        <span class="label">Result</span>
+        <button type="button" class="btn btn-sm" data-copy-target="line-out">Copy</button>
+        <button type="button" class="btn btn-sm" id="apply">Use as input</button>
+      </div>
+      <pre id="line-out" class="output boxed"></pre>
+    </div>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, $$, esc, live } from '../../lib/dom';
+
+  const inputEl = $<HTMLTextAreaElement>('#input');
+  const stripEl = $<HTMLInputElement>('#strip-accents');
+  const casesEl = $('#cases');
+  const lineOut = $('#line-out');
+  const statsEl = $('#stats');
+
+  const deaccent = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  /** Splits any casing convention into lowercase words. */
+  function words(input: string): string[] {
+    return input
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter(Boolean)
+      .map((w) => w.toLowerCase());
+  }
+
+  const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  const CASES: { name: string; hint: string; fn: (s: string) => string }[] = [
+    { name: 'camelCase', hint: 'JS variables', fn: (s) => words(s).map((w, i) => (i ? upperFirst(w) : w)).join('') },
+    { name: 'PascalCase', hint: 'Classes, types', fn: (s) => words(s).map(upperFirst).join('') },
+    { name: 'snake_case', hint: 'Python, SQL', fn: (s) => words(s).join('_') },
+    { name: 'CONSTANT_CASE', hint: 'Env vars', fn: (s) => words(s).join('_').toUpperCase() },
+    { name: 'kebab-case', hint: 'CSS, CLI flags', fn: (s) => words(s).join('-') },
+    { name: 'dot.case', hint: 'Config keys', fn: (s) => words(s).join('.') },
+    { name: 'path/case', hint: 'Routes', fn: (s) => words(s).join('/') },
+    { name: 'Train-Case', hint: 'HTTP headers', fn: (s) => words(s).map(upperFirst).join('-') },
+    { name: 'Title Case', hint: 'Headings', fn: (s) => words(s).map(upperFirst).join(' ') },
+    { name: 'Sentence case', hint: 'Prose', fn: (s) => upperFirst(words(s).join(' ')) },
+    { name: 'lower case', hint: '', fn: (s) => s.toLowerCase() },
+    { name: 'UPPER CASE', hint: '', fn: (s) => s.toUpperCase() },
+    {
+      name: 'slug',
+      hint: 'URLs, filenames',
+      fn: (s) =>
+        deaccent(s)
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}]+/gu, '-')
+          .replace(/^-+|-+$/g, ''),
+    },
+    {
+      name: 'aLtErNaTiNg',
+      hint: '',
+      fn: (s) => [...s].map((c, i) => (i % 2 ? c.toUpperCase() : c.toLowerCase())).join(''),
+    },
+  ];
+
+  function render() {
+    const raw = inputEl.value;
+    const source = stripEl.checked ? deaccent(raw) : raw;
+
+    const chars = [...raw].length;
+    const wordCount = raw.trim() ? raw.trim().split(/\s+/).length : 0;
+    const lines = raw === '' ? 0 : raw.split('\n').length;
+    statsEl.textContent = `${chars} chars · ${wordCount} words · ${lines} lines`;
+
+    casesEl.innerHTML = CASES.map(({ name, hint, fn }) => {
+      let value = '';
+      try {
+        value = source ? fn(source) : '';
+      } catch {
+        value = '';
+      }
+      return `<div class="case-row">
+        <div class="case-meta">
+          <strong>${esc(name)}</strong>
+          ${hint ? `<small>${esc(hint)}</small>` : ''}
+        </div>
+        <code class="case-value">${value ? esc(value) : '<span class="dim">—</span>'}</code>
+        <button type="button" class="btn btn-sm" data-copy-value="${esc(value)}">Copy</button>
+      </div>`;
+    }).join('');
+  }
+
+  const OPS: Record<string, (lines: string[], raw: string) => string> = {
+    sort: (l) => l.sort((a, b) => a.localeCompare(b)).join('\n'),
+    sortdesc: (l) => l.sort((a, b) => b.localeCompare(a)).join('\n'),
+    unique: (l) => [...new Set(l)].join('\n'),
+    reverse: (l) => l.reverse().join('\n'),
+    shuffle: (l) => {
+      for (let i = l.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [l[i], l[j]] = [l[j], l[i]];
+      }
+      return l.join('\n');
+    },
+    trim: (l) => l.map((s) => s.trim()).join('\n'),
+    dropblank: (l) => l.filter((s) => s.trim()).join('\n'),
+    number: (l) => l.map((s, i) => `${String(i + 1).padStart(String(l.length).length, ' ')}. ${s}`).join('\n'),
+    reversechars: (_l, raw) => [...raw].reverse().join(''),
+    dedupespace: (_l, raw) => raw.replace(/[^\S\n]+/g, ' ').replace(/\n{3,}/g, '\n\n'),
+  };
+
+  $$('.js-op').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const op = OPS[btn.dataset.op ?? ''];
+      if (!op) return;
+      lineOut.textContent = op(inputEl.value.split('\n'), inputEl.value);
+    }),
+  );
+
+  $('#apply').addEventListener('click', () => {
+    if (!lineOut.textContent) return;
+    inputEl.value = lineOut.textContent;
+    render();
+  });
+
+  $('#clear').addEventListener('click', () => {
+    inputEl.value = '';
+    lineOut.textContent = '';
+    render();
+    inputEl.focus();
+  });
+
+  live([inputEl, stripEl], render);
+</script>
+
+<style>
+  .cases {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .cases :global(.case-row) {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    border-top: 1px solid var(--border-muted);
+  }
+
+  .cases :global(.case-row:first-child) {
+    border-top: none;
+  }
+
+  .cases :global(.case-row:hover) {
+    background: var(--neutral-muted);
+  }
+
+  .cases :global(.case-meta) {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.3;
+  }
+
+  .cases :global(.case-meta strong) {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  .cases :global(.case-meta small) {
+    font-size: 11px;
+    color: var(--fg-subtle);
+  }
+
+  .cases :global(.case-value) {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    word-break: break-all;
+    color: var(--accent-fg);
+  }
+
+  .boxed {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    min-height: 90px;
+  }
+
+  .line-out-head {
+    justify-content: flex-start;
+  }
+
+  @media (max-width: 700px) {
+    .cases :global(.case-row) {
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px 10px;
+    }
+
+    .cases :global(.case-meta) {
+      grid-column: 1 / -1;
+      flex-direction: row;
+      align-items: baseline;
+      gap: 8px;
+    }
+  }
+</style>

@@ -1,0 +1,381 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import CopyButton from '../../components/CopyButton.astro';
+
+const FLAGS = [
+  { flag: 'g', label: 'global', on: true },
+  { flag: 'i', label: 'ignore case', on: false },
+  { flag: 'm', label: 'multiline', on: false },
+  { flag: 's', label: 'dotall', on: false },
+  { flag: 'u', label: 'unicode', on: false },
+  { flag: 'y', label: 'sticky', on: false },
+];
+
+const PRESETS = [
+  { name: 'Email', pattern: "[\\w.+-]+@[\\w-]+\\.[\\w.-]+" },
+  { name: 'URL', pattern: 'https?:\\/\\/[^\\s"<>]+' },
+  { name: 'IPv4', pattern: '\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b' },
+  { name: 'ISO date', pattern: '(?<y>\\d{4})-(?<m>\\d{2})-(?<d>\\d{2})' },
+  { name: 'Hex color', pattern: '#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\\b' },
+  { name: 'UUID', pattern: '[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}' },
+  { name: 'Semver', pattern: '\\bv?(\\d+)\\.(\\d+)\\.(\\d+)(?:-([\\w.]+))?\\b' },
+  { name: 'Duplicate word', pattern: '\\b(\\w+)\\s+\\1\\b' },
+];
+
+const DEFAULT_PATTERN = '(?<user>[\\w.+-]+)@(?<domain>[\\w-]+\\.[\\w.-]+)';
+const PLACEHOLDER = '\\b(\\w+)@([\\w.]+)\\b';
+
+const SAMPLE = `Contact ada@example.com or grace+dev@lovelace.io before 2024-11-05.
+Docs: https://example.com/guide?ref=devtoys — mirror at http://10.0.42.7:8080
+Build v2.14.3-beta uses the the accent #0969da and fallback #fff.
+Session 3f2504e0-4f89-11d3-9a0c-0305e82c3301 expires 2025-01-31.`;
+---
+
+<ToolLayout slug="regex-tester">
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Pattern</span>
+      <div class="row">
+        <span id="status" class="badge badge-neutral">Ready</span>
+        <CopyButton target="pattern" label="Copy" />
+      </div>
+    </div>
+    <div class="card-pad stack">
+      <div class="pattern-row">
+        <span class="delim">/</span>
+        <input
+          id="pattern"
+          class="input mono"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder={PLACEHOLDER}
+          value={DEFAULT_PATTERN}
+        />
+        <span class="delim">/</span>
+        <span class="delim flags-out" id="flags-out">g</span>
+      </div>
+
+      <div class="row">
+        {
+          FLAGS.map((f) => (
+            <label class="check" title={f.label}>
+              <input type="checkbox" class="js-flag" value={f.flag} checked={f.on} />
+              <span>
+                <code>{f.flag}</code> <span class="flag-label">{f.label}</span>
+              </span>
+            </label>
+          ))
+        }
+      </div>
+
+      <div class="presets">
+        <span class="label">Presets</span>
+        {
+          PRESETS.map((p) => (
+            <button type="button" class="btn btn-sm js-preset" data-pattern={p.pattern}>
+              {p.name}
+            </button>
+          ))
+        }
+      </div>
+
+      <p id="error" class="flash flash-danger" hidden></p>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Test string</span>
+        <button type="button" class="btn btn-sm" id="load-sample">Load sample</button>
+      </div>
+      <div class="card-pad">
+        <textarea id="subject" class="textarea" rows="10" spellcheck="false">{SAMPLE}</textarea>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Highlighted matches</span>
+        <span id="match-count" class="badge badge-neutral">0 matches</span>
+      </div>
+      <div id="highlight" class="output highlight" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Match details</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="matches">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Index</th>
+            <th>Match</th>
+            <th>Groups</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty" id="no-matches">No matches yet.</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Replace</span>
+      <CopyButton target="replace-out" label="Copy result" />
+    </div>
+    <div class="card-pad stack">
+      <div class="field">
+        <label class="label" for="replacement">
+          Replacement — use <code>$1</code>, <code>$&lt;name&gt;</code>, <code>$&amp;</code>
+        </label>
+        <input
+          id="replacement"
+          class="input mono"
+          type="text"
+          spellcheck="false"
+          value="$<user> [at] $<domain>"
+        />
+      </div>
+      <pre id="replace-out" class="output replace-out"></pre>
+    </div>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, $$, esc, live } from '../../lib/dom';
+
+  const patternEl = $<HTMLInputElement>('#pattern');
+  const subjectEl = $<HTMLTextAreaElement>('#subject');
+  const replacementEl = $<HTMLInputElement>('#replacement');
+  const flagsOut = $('#flags-out');
+  const errorEl = $('#error');
+  const statusEl = $('#status');
+  const highlightEl = $('#highlight');
+  const countEl = $('#match-count');
+  const tbody = $('#matches tbody');
+  const noMatches = $('#no-matches');
+  const replaceOut = $('#replace-out');
+
+  const SAMPLE = subjectEl.value;
+
+  interface Hit {
+    index: number;
+    text: string;
+    groups: string[];
+    named: Record<string, string | undefined>;
+  }
+
+  const flags = () =>
+    $$<HTMLInputElement>('.js-flag')
+      .filter((el) => el.checked)
+      .map((el) => el.value)
+      .join('');
+
+  function collect(re: RegExp, subject: string): Hit[] {
+    const hits: Hit[] = [];
+    const global = re.global || re.sticky;
+    re.lastIndex = 0;
+
+    for (let i = 0; i < 5000; i++) {
+      const m = re.exec(subject);
+      if (!m) break;
+      hits.push({
+        index: m.index,
+        text: m[0],
+        groups: m.slice(1).map((g) => g ?? ''),
+        named: m.groups ?? {},
+      });
+      if (!global) break;
+      // Zero-length matches would otherwise loop forever.
+      if (m[0] === '') re.lastIndex++;
+    }
+    return hits;
+  }
+
+  function renderHighlight(subject: string, hits: Hit[]) {
+    if (!subject) {
+      highlightEl.innerHTML = '<span class="dim">Nothing to test.</span>';
+      return;
+    }
+    let html = '';
+    let cursor = 0;
+    hits.forEach((hit, i) => {
+      if (hit.index < cursor) return;
+      html += esc(subject.slice(cursor, hit.index));
+      const body = hit.text === '' ? '&#8203;' : esc(hit.text);
+      html += `<mark class="hl hl-${i % 2}" title="match ${i + 1} @ ${hit.index}">${body}</mark>`;
+      cursor = hit.index + hit.text.length;
+    });
+    html += esc(subject.slice(cursor));
+    highlightEl.innerHTML = html;
+  }
+
+  function renderTable(hits: Hit[]) {
+    noMatches.hidden = hits.length > 0;
+    tbody.innerHTML = hits
+      .slice(0, 200)
+      .map((hit, i) => {
+        const named = Object.entries(hit.named).filter(([, v]) => v !== undefined);
+        const parts = named.length
+          ? named.map(([k, v]) => `<code>${esc(k)}</code> ${esc(v ?? '')}`)
+          : hit.groups.map((g, gi) => `<code>$${gi + 1}</code> ${esc(g)}`);
+        return `<tr>
+          <td>${i + 1}</td>
+          <td class="mono">${hit.index}</td>
+          <td class="mono cell-match">${esc(hit.text) || '<span class="dim">(empty)</span>'}</td>
+          <td>${parts.length ? `<div class="groups">${parts.join('')}</div>` : '<span class="dim">—</span>'}</td>
+        </tr>`;
+      })
+      .join('');
+  }
+
+  function run() {
+    const source = patternEl.value;
+    const flagStr = flags();
+    const subject = subjectEl.value;
+    flagsOut.textContent = flagStr || ' ';
+
+    if (!source) {
+      errorEl.hidden = true;
+      patternEl.classList.remove('is-invalid');
+      statusEl.textContent = 'Ready';
+      statusEl.className = 'badge badge-neutral';
+      renderHighlight(subject, []);
+      renderTable([]);
+      countEl.textContent = '0 matches';
+      replaceOut.textContent = subject;
+      return;
+    }
+
+    let re: RegExp;
+    try {
+      re = new RegExp(source, flagStr);
+    } catch (err) {
+      patternEl.classList.add('is-invalid');
+      errorEl.hidden = false;
+      errorEl.textContent = (err as Error).message;
+      statusEl.textContent = 'Invalid';
+      statusEl.className = 'badge badge-danger';
+      return;
+    }
+
+    patternEl.classList.remove('is-invalid');
+    errorEl.hidden = true;
+
+    const hits = collect(re, subject);
+    countEl.textContent = `${hits.length} match${hits.length === 1 ? '' : 'es'}`;
+    countEl.className = hits.length ? 'badge badge-success' : 'badge badge-neutral';
+    statusEl.textContent = 'Valid';
+    statusEl.className = 'badge badge-success';
+
+    renderHighlight(subject, hits);
+    renderTable(hits);
+
+    try {
+      re.lastIndex = 0;
+      replaceOut.textContent = subject.replace(re, replacementEl.value);
+    } catch (err) {
+      replaceOut.textContent = `Replacement error: ${(err as Error).message}`;
+    }
+  }
+
+  $$('.js-preset').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      patternEl.value = btn.dataset.pattern ?? '';
+      run();
+    }),
+  );
+
+  $('#load-sample').addEventListener('click', () => {
+    subjectEl.value = SAMPLE;
+    run();
+  });
+
+  live([patternEl, subjectEl, replacementEl, ...$$('.js-flag')], run);
+</script>
+
+<style>
+  .pattern-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .delim {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    color: var(--fg-subtle);
+  }
+
+  .flags-out {
+    min-width: 2ch;
+    font-size: 13px;
+    color: var(--accent-fg);
+  }
+
+  .flag-label {
+    color: var(--fg-muted);
+    font-size: 12px;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 0 4px;
+    background: var(--neutral-muted);
+    border-radius: 4px;
+  }
+
+  .presets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .highlight {
+    min-height: 214px;
+    max-height: none;
+  }
+
+  .replace-out {
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+  }
+
+  .highlight :global(.hl) {
+    padding: 1px 0;
+    border-radius: 3px;
+    color: var(--fg);
+    background: var(--attention-subtle);
+    box-shadow: 0 0 0 1px var(--attention-border);
+  }
+
+  .highlight :global(.hl-1) {
+    background: var(--accent-subtle);
+    box-shadow: 0 0 0 1px var(--accent-muted);
+  }
+
+  :global(.dim) {
+    color: var(--fg-subtle);
+  }
+
+  :global(.cell-match) {
+    max-width: 380px;
+    word-break: break-all;
+  }
+
+  :global(.groups) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+</style>
