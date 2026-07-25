@@ -1,0 +1,213 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import CopyButton from '../../components/CopyButton.astro';
+
+const MODES = [
+  { value: 'base64', label: 'Base64' },
+  { value: 'base64url', label: 'Base64 URL' },
+  { value: 'hex', label: 'Hex' },
+  { value: 'url', label: 'URL' },
+  { value: 'urlcomponent', label: 'URL component' },
+  { value: 'binary', label: 'Binary' },
+  { value: 'rot13', label: 'ROT13' },
+];
+---
+
+<ToolLayout slug="encoder-decoder">
+  <section class="card card-pad">
+    <div class="controls">
+      <div class="field">
+        <span class="label">Format</span>
+        <div class="segmented" id="mode" role="tablist" aria-label="Format">
+          {
+            MODES.map((m, i) => (
+              <button type="button" role="tab" data-value={m.value} aria-selected={i === 0}>
+                {m.label}
+              </button>
+            ))
+          }
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">Direction</span>
+        <div class="segmented" id="direction" role="tablist" aria-label="Direction">
+          <button type="button" role="tab" data-value="encode" aria-selected="true">Encode</button>
+          <button type="button" role="tab" data-value="decode">Decode</button>
+        </div>
+      </div>
+
+      <label class="check" id="wrap-wrap">
+        <input type="checkbox" id="chunk" />
+        <span>Wrap output at 76 chars</span>
+      </label>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title" id="input-label">Plain text</span>
+        <div class="row">
+          <span class="badge badge-neutral" id="in-stats">0 chars</span>
+          <button type="button" class="btn btn-sm" id="clear">Clear</button>
+        </div>
+      </div>
+      <div class="card-pad">
+        <textarea
+          id="input"
+          class="textarea"
+          rows="12"
+          spellcheck="false"
+          placeholder="Type or paste here…">Hello, DevToys! ✨</textarea
+        >
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title" id="output-label">Base64</span>
+        <div class="row">
+          <span class="badge badge-neutral" id="out-stats">0 chars</span>
+          <button type="button" class="btn btn-sm" id="swap" title="Send output back to input">
+            ↔ Use as input
+          </button>
+          <CopyButton target="output" />
+        </div>
+      </div>
+      <div class="card-pad">
+        <textarea id="output" class="textarea" rows="12" spellcheck="false" readonly></textarea>
+      </div>
+    </section>
+  </div>
+
+  <p id="error" class="flash flash-danger" hidden></p>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">Byte inspector</span></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr><th>Metric</th><th>Value</th></tr>
+        </thead>
+        <tbody id="inspector"></tbody>
+      </table>
+    </div>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, esc, live, segmented } from '../../lib/dom';
+  import {
+    MODE_LABELS,
+    chunk,
+    decode,
+    encode,
+    inspect,
+    type EncodingMode,
+  } from '../../lib/encoding';
+
+  const inputEl = $<HTMLTextAreaElement>('#input');
+  const outputEl = $<HTMLTextAreaElement>('#output');
+  const errorEl = $('#error');
+  const chunkEl = $<HTMLInputElement>('#chunk');
+  const inLabel = $('#input-label');
+  const outLabel = $('#output-label');
+  const inStats = $('#in-stats');
+  const outStats = $('#out-stats');
+  const inspector = $('#inspector');
+
+  let mode: EncodingMode = 'base64';
+  let direction: 'encode' | 'decode' = 'encode';
+
+  function updateInspector(text: string) {
+    const stats = inspect(text);
+    const rows: [string, string][] = [
+      ['Characters', String(stats.characters)],
+      ['UTF-8 bytes', String(stats.bytes)],
+      ['Lines', String(stats.lines)],
+      ['Words', String(stats.words)],
+      ['Base64 size', `${stats.base64Size} chars`],
+      ['First bytes', stats.firstBytes || '—'],
+    ];
+    inspector.innerHTML = rows
+      .map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`)
+      .join('');
+  }
+
+  function run() {
+    const text = inputEl.value;
+    const encoding = direction === 'encode';
+    inLabel.textContent = encoding ? 'Plain text' : MODE_LABELS[mode];
+    outLabel.textContent = encoding ? MODE_LABELS[mode] : 'Plain text';
+    $('#wrap-wrap').hidden = !encoding || (mode !== 'base64' && mode !== 'base64url');
+
+    inStats.textContent = `${text.length} chars`;
+    updateInspector(encoding ? text : outputEl.value);
+
+    if (!text) {
+      outputEl.value = '';
+      outStats.textContent = '0 chars';
+      errorEl.hidden = true;
+      inputEl.classList.remove('is-invalid');
+      return;
+    }
+
+    try {
+      const wrap = chunkEl.checked && (mode === 'base64' || mode === 'base64url');
+      const result = encoding
+        ? wrap
+          ? chunk(encode(text, mode))
+          : encode(text, mode)
+        : decode(text, mode);
+      outputEl.value = result;
+      outStats.textContent = `${result.length} chars`;
+      errorEl.hidden = true;
+      inputEl.classList.remove('is-invalid');
+      updateInspector(encoding ? text : result);
+    } catch (err) {
+      outputEl.value = '';
+      outStats.textContent = '0 chars';
+      inputEl.classList.add('is-invalid');
+      errorEl.hidden = false;
+      errorEl.textContent = `Cannot decode as ${MODE_LABELS[mode]}: ${(err as Error).message}`;
+    }
+  }
+
+  segmented($('#mode'), (value) => {
+    mode = value as EncodingMode;
+    run();
+  });
+
+  segmented($('#direction'), (value) => {
+    direction = value as 'encode' | 'decode';
+    run();
+  });
+
+  $('#swap').addEventListener('click', () => {
+    if (!outputEl.value) return;
+    inputEl.value = outputEl.value;
+    run();
+  });
+
+  $('#clear').addEventListener('click', () => {
+    inputEl.value = '';
+    run();
+    inputEl.focus();
+  });
+
+  live([inputEl, chunkEl], run);
+</script>
+
+<style>
+  .controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .controls .check {
+    padding-bottom: 6px;
+  }
+</style>

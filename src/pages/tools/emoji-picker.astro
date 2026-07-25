@@ -1,0 +1,312 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import { GLYPHS, GROUPS } from '../../lib/emoji';
+---
+
+<ToolLayout slug="emoji-picker">
+  <section class="card card-pad">
+    <div class="toolbar">
+      <input
+        type="search"
+        id="search"
+        class="input search"
+        placeholder="Search — “rocket”, “check”, “arrow”, “lambda”…"
+        autocomplete="off"
+        aria-label="Search emoji and symbols"
+      />
+      <div class="field">
+        <span class="label">Copy as</span>
+        <div class="segmented" id="format">
+          <button type="button" data-value="char" aria-selected="true">Glyph</button>
+          <button type="button" data-value="codepoint">U+ code</button>
+          <button type="button" data-value="entity">HTML entity</button>
+          <button type="button" data-value="js">JS escape</button>
+          <button type="button" data-value="css">CSS escape</button>
+        </div>
+      </div>
+      <span class="badge badge-neutral" id="count">{GLYPHS.length} glyphs</span>
+    </div>
+
+    <div class="chips" id="chips">
+      <button type="button" class="chip-btn js-group is-on" data-group="">All</button>
+      {
+        GROUPS.map((group) => (
+          <button type="button" class="chip-btn js-group" data-group={group}>
+            {group}
+          </button>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="card" id="recent-card" hidden>
+    <div class="card-head">
+      <span class="card-title">Recently copied</span>
+      <button type="button" class="btn btn-sm" id="clear-recent">Clear</button>
+    </div>
+    <div class="grid" id="recent"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Glyphs</span>
+      <span class="hint">Click to copy · hover for the name</span>
+    </div>
+    <div class="grid" id="grid">
+      {
+        GLYPHS.map((g) => (
+          <button
+            type="button"
+            class="glyph js-glyph"
+            data-char={g.char}
+            data-name={`${g.name} ${g.keywords} ${g.group}`.toLowerCase()}
+            data-group={g.group}
+            title={g.name}
+          >
+            {g.char}
+          </button>
+        ))
+      }
+    </div>
+    <p class="empty" id="empty" hidden>Nothing matches that search.</p>
+  </section>
+
+  <section class="card" id="detail-card">
+    <div class="card-head"><span class="card-title">Details</span></div>
+    <div class="detail card-pad">
+      <div class="detail-glyph" id="detail-glyph">🔍</div>
+      <div class="table-wrap detail-table">
+        <table class="data">
+          <tbody id="detail"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, $$, copyText, esc, flashButton, store } from '../../lib/dom';
+  import { codePoints, formatGlyph, type GlyphFormat } from '../../lib/emoji';
+
+  const searchEl = $<HTMLInputElement>('#search');
+  const gridEl = $('#grid');
+  const emptyEl = $('#empty');
+  const recentStore = store('emoji-recent');
+
+  let format: GlyphFormat = 'char';
+  let group = '';
+
+  function filter() {
+    const q = searchEl.value.trim().toLowerCase();
+    let visible = 0;
+
+    $$<HTMLElement>('.js-glyph', gridEl).forEach((btn) => {
+      const matchGroup = !group || btn.dataset.group === group;
+      const matchText = !q || (btn.dataset.name ?? '').includes(q);
+      const show = matchGroup && matchText;
+      btn.hidden = !show;
+      if (show) visible++;
+    });
+
+    emptyEl.hidden = visible > 0;
+    $('#count').textContent = `${visible} glyph${visible === 1 ? '' : 's'}`;
+  }
+
+  function showDetail(char: string, name: string) {
+    $('#detail-glyph').textContent = char;
+    const rows: [string, string][] = [
+      ['Name', name],
+      ['Glyph', char],
+      ['Code points', codePoints(char).join(' ')],
+      ['HTML entity', [...char].map((c) => `&#${c.codePointAt(0)};`).join('')],
+      ['JavaScript', [...char].map((c) => `\\u{${c.codePointAt(0)!.toString(16)}}`).join('')],
+      ['CSS content', `content: "${[...char].map((c) => `\\${c.codePointAt(0)!.toString(16)}`).join('')}"`],
+      ['UTF-8 bytes', Array.from(new TextEncoder().encode(char), (b) => b.toString(16).padStart(2, '0')).join(' ')],
+      ['Length', `${char.length} UTF-16 units · ${[...char].length} code points`],
+    ];
+    $('#detail').innerHTML = rows
+      .map(
+        ([k, v]) => `<tr>
+          <td class="key">${esc(k)}</td>
+          <td class="mono val">${esc(v)}</td>
+          <td class="act"><button type="button" class="btn btn-sm" data-copy-value="${esc(v)}">Copy</button></td>
+        </tr>`,
+      )
+      .join('');
+  }
+
+  function renderRecent() {
+    const chars = (recentStore.get() ?? '').split(' ').filter(Boolean);
+    $('#recent-card').hidden = chars.length === 0;
+    $('#recent').innerHTML = chars
+      .map((c) => `<button type="button" class="glyph js-glyph-recent" data-char="${esc(c)}">${esc(c)}</button>`)
+      .join('');
+  }
+
+  function remember(char: string) {
+    const chars = (recentStore.get() ?? '').split(' ').filter(Boolean);
+    recentStore.set([char, ...chars.filter((c) => c !== char)].slice(0, 24).join(' '));
+    renderRecent();
+  }
+
+  async function pick(btn: HTMLElement) {
+    const char = btn.dataset.char ?? '';
+    if (!char) return;
+    const ok = await copyText(formatGlyph(char, format));
+    btn.classList.add('copied-glyph');
+    window.setTimeout(() => btn.classList.remove('copied-glyph'), 700);
+    showDetail(char, btn.title || char);
+    if (ok) remember(char);
+  }
+
+  gridEl.addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLElement>('.js-glyph');
+    if (btn) void pick(btn);
+  });
+
+  $('#recent').addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLElement>('.js-glyph-recent');
+    if (btn) void pick(btn);
+  });
+
+  $('#chips').addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLElement>('.js-group');
+    if (!btn) return;
+    group = btn.dataset.group ?? '';
+    $$('.js-group').forEach((b) => b.classList.toggle('is-on', b === btn));
+    filter();
+  });
+
+  $('#format').addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement).closest('button');
+    if (!btn) return;
+    $$('#format button').forEach((b) => b.setAttribute('aria-selected', String(b === btn)));
+    format = (btn.dataset.value ?? 'char') as GlyphFormat;
+  });
+
+  $('#clear-recent').addEventListener('click', (event) => {
+    recentStore.set('');
+    renderRecent();
+    flashButton(event.currentTarget as HTMLElement, 'Cleared');
+  });
+
+  searchEl.addEventListener('input', filter);
+  renderRecent();
+  filter();
+</script>
+
+<style>
+  .toolbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .search {
+    flex: 1;
+    min-width: 220px;
+    height: 34px;
+  }
+
+  .chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+  }
+
+  .chip-btn {
+    padding: 4px 11px;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    background: var(--canvas-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .chip-btn:hover {
+    color: var(--fg);
+    border-color: var(--fg-subtle);
+  }
+
+  .chip-btn.is-on {
+    color: var(--fg-on-emphasis);
+    background: var(--accent-emphasis);
+    border-color: transparent;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+    gap: 4px;
+    padding: 12px;
+    max-height: 52vh;
+    overflow-y: auto;
+  }
+
+  .glyph {
+    aspect-ratio: 1;
+    display: grid;
+    place-items: center;
+    font-size: 22px;
+    line-height: 1;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.1s ease, transform 0.1s ease;
+  }
+
+  .glyph:hover {
+    background: var(--canvas-subtle);
+    border-color: var(--border);
+    transform: scale(1.12);
+  }
+
+  .glyph.copied-glyph {
+    background: var(--success-subtle);
+    border-color: var(--success-border);
+  }
+
+  .detail {
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+  }
+
+  .detail-glyph {
+    display: grid;
+    place-items: center;
+    width: 96px;
+    height: 96px;
+    flex-shrink: 0;
+    font-size: 48px;
+    line-height: 1;
+    background: var(--canvas-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+
+  .detail-table {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+  }
+
+  @media (max-width: 620px) {
+    .detail {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .detail-glyph {
+      width: 100%;
+      height: 84px;
+    }
+  }
+</style>

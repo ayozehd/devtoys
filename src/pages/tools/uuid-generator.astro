@@ -1,0 +1,233 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import CopyButton from '../../components/CopyButton.astro';
+---
+
+<ToolLayout slug="uuid-generator">
+  <section class="card card-pad">
+    <div class="toolbar">
+      <div class="field">
+        <span class="label">Generator</span>
+        <div class="segmented" id="kind">
+          <button type="button" data-value="uuid4" aria-selected="true">UUID v4</button>
+          <button type="button" data-value="uuid7">UUID v7</button>
+          <button type="button" data-value="nil">Nil / Max</button>
+          <button type="button" data-value="ulid">ULID</button>
+          <button type="button" data-value="nanoid">Nano ID</button>
+          <button type="button" data-value="string">Random string</button>
+          <button type="button" data-value="number">Numbers</button>
+          <button type="button" data-value="color">Colors</button>
+          <button type="button" data-value="lorem">Lorem ipsum</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="options">
+      <label class="field opt" id="opt-count">
+        <span class="label">How many</span>
+        <input type="number" id="count" class="input" min="1" max="500" value="10" />
+      </label>
+
+      <label class="field opt" id="opt-length" hidden>
+        <span class="label">Length</span>
+        <input type="number" id="length" class="input" min="1" max="256" value="21" />
+      </label>
+
+      <label class="field opt" id="opt-min" hidden>
+        <span class="label">Minimum</span>
+        <input type="number" id="min" class="input" value="1" />
+      </label>
+
+      <label class="field opt" id="opt-max" hidden>
+        <span class="label">Maximum</span>
+        <input type="number" id="max" class="input" value="100" />
+      </label>
+
+      <div class="field opt" id="opt-charset" hidden>
+        <span class="label">Character set</span>
+        <div class="row">
+          <label class="check"><input type="checkbox" class="js-charset" value="lower" checked /><span>a–z</span></label>
+          <label class="check"><input type="checkbox" class="js-charset" value="upper" checked /><span>A–Z</span></label>
+          <label class="check"><input type="checkbox" class="js-charset" value="digits" checked /><span>0–9</span></label>
+          <label class="check"><input type="checkbox" class="js-charset" value="symbols" /><span>!@#$…</span></label>
+        </div>
+      </div>
+
+      <div class="field opt">
+        <span class="label">Formatting</span>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="upper" /><span>Uppercase</span></label>
+          <label class="check"><input type="checkbox" id="braces" /><span>Wrap in braces</span></label>
+          <label class="check"><input type="checkbox" id="quotes" /><span>Quote &amp; comma</span></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="row actions">
+      <button type="button" class="btn btn-accent" id="generate">Generate</button>
+      <CopyButton target="output" label="Copy all" />
+      <button type="button" class="btn btn-sm" id="download">Download .txt</button>
+      <span class="badge badge-neutral" id="meta"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Output</span>
+      <span class="hint" id="kind-hint"></span>
+    </div>
+    <pre id="output" class="output tall"></pre>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, $$, download as save, live, segmented } from '../../lib/dom';
+  import {
+    CHARSETS,
+    MAX_UUID,
+    NIL_UUID,
+    decorate,
+    nanoid,
+    randomColor,
+    randomInt,
+    randomString,
+    sentence,
+    ulid,
+    uuid4,
+    uuid7,
+  } from '../../lib/random';
+
+  const countEl = $<HTMLInputElement>('#count');
+  const lengthEl = $<HTMLInputElement>('#length');
+  const minEl = $<HTMLInputElement>('#min');
+  const maxEl = $<HTMLInputElement>('#max');
+  const upperEl = $<HTMLInputElement>('#upper');
+  const bracesEl = $<HTMLInputElement>('#braces');
+  const quotesEl = $<HTMLInputElement>('#quotes');
+  const outputEl = $('#output');
+
+  let kind = 'uuid4';
+
+  const HINTS: Record<string, string> = {
+    uuid4: '122 bits of randomness from crypto.getRandomValues — the everyday choice.',
+    uuid7: 'Time-ordered UUID (draft RFC 9562) — sorts by creation time, index-friendly.',
+    nil: 'The all-zero and all-one UUIDs, useful as sentinels in tests.',
+    ulid: '48-bit timestamp + 80 bits of entropy, Crockford base32, lexicographically sortable.',
+    nanoid: 'URL-safe 21-character id — collision odds comparable to UUID v4.',
+    string: 'Random string from the character sets you pick.',
+    number: 'Uniform random integers in the range you set.',
+    color: 'Random colors as hex, with the matching rgb() value.',
+    lorem: 'Placeholder sentences for layout work.',
+  };
+
+  function pool(): string {
+    return $$<HTMLInputElement>('.js-charset')
+      .filter((el) => el.checked)
+      .map((el) => CHARSETS[el.value])
+      .join('');
+  }
+
+  function generateOne(): string {
+    switch (kind) {
+      case 'uuid4':
+        return uuid4();
+      case 'uuid7':
+        return uuid7();
+      case 'ulid':
+        return ulid();
+      case 'nanoid':
+        return nanoid(Number(lengthEl.value) || 21);
+      case 'string':
+        return randomString(Number(lengthEl.value) || 16, pool());
+      case 'number':
+        return String(randomInt(Number(minEl.value), Number(maxEl.value)));
+      case 'color':
+        return randomColor();
+      case 'lorem':
+        return sentence();
+      default:
+        return '';
+    }
+  }
+
+  const decorations = () => ({
+    upper: upperEl.checked,
+    braces: bracesEl.checked,
+    quotes: quotesEl.checked,
+  });
+
+  function generate() {
+    const count = Math.min(500, Math.max(1, Number(countEl.value) || 1));
+
+    if (kind === 'nil') {
+      outputEl.textContent = [NIL_UUID, MAX_UUID]
+        .map((value) => decorate(value, decorations()))
+        .join('\n');
+      $('#meta').textContent = '2 values';
+      return;
+    }
+
+    const values = Array.from({ length: count }, () => decorate(generateOne(), decorations()));
+    outputEl.textContent = values.join('\n');
+
+    const unique = new Set(values).size;
+    $('#meta').textContent = `${values.length} values · ${unique} unique`;
+  }
+
+  function syncOptions() {
+    $('#kind-hint').textContent = HINTS[kind] ?? '';
+    $('#opt-count').hidden = kind === 'nil';
+    $('#opt-length').hidden = kind !== 'nanoid' && kind !== 'string';
+    $('#opt-min').hidden = kind !== 'number';
+    $('#opt-max').hidden = kind !== 'number';
+    $('#opt-charset').hidden = kind !== 'string';
+    lengthEl.value = kind === 'nanoid' ? '21' : lengthEl.value;
+  }
+
+  segmented($('#kind'), (value) => {
+    kind = value;
+    syncOptions();
+    generate();
+  });
+
+  $('#generate').addEventListener('click', generate);
+  $('#download').addEventListener('click', () => save(`${kind}.txt`, outputEl.textContent ?? ''));
+
+  live(
+    [countEl, lengthEl, minEl, maxEl, upperEl, bracesEl, quotesEl, ...$$('.js-charset')],
+    generate,
+  );
+
+  syncOptions();
+</script>
+
+<style>
+  .toolbar {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .options {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+
+  .opt .input {
+    width: 120px;
+  }
+
+  .actions {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-muted);
+  }
+
+  .tall {
+    min-height: 320px;
+    max-height: 66vh;
+  }
+</style>

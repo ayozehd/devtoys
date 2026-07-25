@@ -1,0 +1,330 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+
+const SAMPLE = `region,product,units,unit_price,ordered_at
+EMEA,Widget,120,9.99,2024-01-14
+EMEA,Gadget,45,24.50,2024-01-18
+AMER,Widget,310,9.99,2024-02-02
+APAC,Doohickey,78,15.75,2024-02-11
+AMER,Gadget,12,24.50,2024-03-05
+APAC,Widget,205,9.49,2024-03-22`;
+---
+
+<ToolLayout slug="csv-viewer">
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Input</span>
+      <div class="row">
+        <label class="btn btn-sm">
+          Open file…
+          <input type="file" id="file" accept=".csv,.tsv,.txt,text/*" hidden />
+        </label>
+        <button type="button" class="btn btn-sm" id="sample">Load sample</button>
+        <button type="button" class="btn btn-sm" id="clear">Clear</button>
+      </div>
+    </div>
+    <div class="card-pad stack">
+      <textarea id="input" class="textarea" rows="8" spellcheck="false"
+        placeholder="Paste CSV or TSV…">{SAMPLE}</textarea
+      >
+      <div class="toolbar">
+        <div class="field">
+          <span class="label">Delimiter</span>
+          <div class="segmented" id="delim">
+            <button type="button" data-value="auto" aria-selected="true">Auto</button>
+            <button type="button" data-value=",">Comma</button>
+            <button type="button" data-value="&#9;">Tab</button>
+            <button type="button" data-value=";">Semicolon</button>
+            <button type="button" data-value="|">Pipe</button>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="header" checked /><span>First row is a header</span></label>
+        <div class="spacer"></div>
+        <span class="badge badge-neutral" id="shape">0 × 0</span>
+        <button type="button" class="btn btn-sm" id="to-json">Export JSON</button>
+      </div>
+      <p id="error" class="flash flash-attention" hidden></p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Table</span>
+      <div class="row">
+        <input
+          type="search"
+          id="filter"
+          class="input filter-input"
+          placeholder="Filter rows…"
+          aria-label="Filter rows"
+        />
+        <span class="badge badge-neutral" id="visible">0 rows</span>
+      </div>
+    </div>
+    <div class="table-wrap tall">
+      <table class="data" id="grid">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty" id="empty">Nothing to show yet.</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">Column analysis</span></div>
+    <div class="table-wrap">
+      <table class="data" id="analysis">
+        <thead>
+          <tr>
+            <th>Column</th>
+            <th>Type</th>
+            <th>Filled</th>
+            <th>Empty</th>
+            <th>Unique</th>
+            <th>Min</th>
+            <th>Max</th>
+            <th>Sum</th>
+            <th>Mean</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" id="json-card" hidden>
+    <div class="card-head">
+      <span class="card-title">JSON</span>
+      <button type="button" class="btn btn-sm" data-copy-target="json-out">Copy</button>
+    </div>
+    <pre id="json-out" class="output"></pre>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, esc, live, segmented } from '../../lib/dom';
+  import { columnStats, readTable, toObjects, viewRows } from '../../lib/csv';
+
+  const inputEl = $<HTMLTextAreaElement>('#input');
+  const headerEl = $<HTMLInputElement>('#header');
+  const filterEl = $<HTMLInputElement>('#filter');
+  const grid = $<HTMLTableElement>('#grid');
+  const emptyEl = $('#empty');
+  const errorEl = $('#error');
+  const analysisBody = $('#analysis tbody');
+
+  const SAMPLE = inputEl.value;
+  let delimiter = 'auto';
+  let sortCol = -1;
+  let sortDir: 1 | -1 = 1;
+  let headers: string[] = [];
+  let rows: string[][] = [];
+
+  function analyse() {
+    analysisBody.innerHTML = columnStats(headers, rows)
+      .map((c) => {
+        const badge =
+          c.type === 'number'
+            ? 'badge-accent'
+            : c.type === 'date'
+              ? 'badge-attention'
+              : 'badge-neutral';
+
+        return `<tr>
+          <td><strong>${esc(c.name)}</strong></td>
+          <td><span class="badge ${badge}">${c.type}</span></td>
+          <td class="mono">${c.filled}</td>
+          <td class="mono">${c.empty}</td>
+          <td class="mono">${c.unique}</td>
+          <td class="mono cell-clip">${esc(c.min)}</td>
+          <td class="mono cell-clip">${esc(c.max)}</td>
+          <td class="mono">${esc(c.sum)}</td>
+          <td class="mono">${esc(c.mean)}</td>
+        </tr>`;
+      })
+      .join('');
+  }
+
+  function renderGrid() {
+    const visible = viewRows(rows, filterEl.value, sortCol, sortDir);
+
+    $('#visible').textContent = `${visible.length} row${visible.length === 1 ? '' : 's'}`;
+    emptyEl.hidden = visible.length > 0;
+
+    grid.tHead!.innerHTML = headers.length
+      ? `<tr><th class="rownum">#</th>${headers
+          .map(
+            (h, i) =>
+              `<th><button type="button" class="sort js-sort" data-col="${i}">${esc(h)}${
+                sortCol === i ? `<span class="arrow">${sortDir === 1 ? '▲' : '▼'}</span>` : ''
+              }</button></th>`,
+          )
+          .join('')}</tr>`
+      : '';
+
+    grid.tBodies[0].innerHTML = visible
+      .slice(0, 1000)
+      .map(
+        (r, i) =>
+          `<tr><td class="rownum">${i + 1}</td>${headers
+            .map((_, c) => `<td class="cell-clip">${esc(r[c] ?? '')}</td>`)
+            .join('')}</tr>`,
+      )
+      .join('');
+
+    if (visible.length > 1000) {
+      grid.tBodies[0].insertAdjacentHTML(
+        'beforeend',
+        `<tr><td class="rownum"></td><td colspan="${headers.length}" class="dim">…showing first 1000 of ${visible.length} rows</td></tr>`,
+      );
+    }
+  }
+
+  function run() {
+    const text = inputEl.value;
+    if (!text.trim()) {
+      headers = [];
+      rows = [];
+      grid.tHead!.innerHTML = '';
+      grid.tBodies[0].innerHTML = '';
+      analysisBody.innerHTML = '';
+      $('#shape').textContent = '0 × 0';
+      $('#visible').textContent = '0 rows';
+      emptyEl.hidden = false;
+      errorEl.hidden = true;
+      return;
+    }
+
+    const table = readTable(text, delimiter, headerEl.checked);
+    if (!table.headers.length) return;
+
+    headers = table.headers;
+    rows = table.rows;
+
+    errorEl.hidden = table.ragged === 0;
+    if (table.ragged) {
+      errorEl.textContent = `${table.ragged} row${table.ragged === 1 ? ' has' : 's have'} a different column count than the header — check quoting or the delimiter.`;
+    }
+
+    $('#shape').textContent = `${rows.length} × ${headers.length}`;
+    renderGrid();
+    analyse();
+  }
+
+  grid.addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLElement>('.js-sort');
+    if (!btn) return;
+    const col = Number(btn.dataset.col);
+    if (col === sortCol) sortDir = sortDir === 1 ? -1 : 1;
+    else {
+      sortCol = col;
+      sortDir = 1;
+    }
+    renderGrid();
+  });
+
+  segmented($('#delim'), (value) => {
+    delimiter = value;
+    run();
+  });
+
+  $('#to-json').addEventListener('click', () => {
+    $('#json-out').textContent = JSON.stringify(toObjects(headers, rows), null, 2);
+    $('#json-card').hidden = false;
+  });
+
+  $('#sample').addEventListener('click', () => {
+    inputEl.value = SAMPLE;
+    run();
+  });
+
+  $('#clear').addEventListener('click', () => {
+    inputEl.value = '';
+    run();
+  });
+
+  $<HTMLInputElement>('#file').addEventListener('change', async (event) => {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    inputEl.value = await file.text();
+    run();
+  });
+
+  live([inputEl, headerEl, filterEl], run);
+</script>
+
+<style>
+  .toolbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .toolbar .check {
+    padding-bottom: 6px;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .filter-input {
+    width: 180px;
+    height: 28px;
+    font-size: 13px;
+  }
+
+  .tall {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  label.btn {
+    cursor: pointer;
+  }
+
+  #grid :global(.rownum) {
+    width: 40px;
+    color: var(--fg-subtle);
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    user-select: none;
+  }
+
+  #grid :global(th) {
+    padding: 0;
+  }
+
+  #grid :global(.sort) {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    width: 100%;
+    padding: 7px 12px;
+    font: inherit;
+    font-weight: 600;
+    color: var(--fg-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  #grid :global(.sort:hover) {
+    color: var(--fg);
+  }
+
+  #grid :global(.arrow) {
+    font-size: 9px;
+    color: var(--accent-fg);
+  }
+
+  :global(.cell-clip) {
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+</style>

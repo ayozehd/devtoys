@@ -1,0 +1,440 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+---
+
+<ToolLayout slug="color-picker">
+  <div class="split">
+    <section class="card preview-card">
+      <div class="swatch" id="swatch">
+        <span id="swatch-label">#0969DA</span>
+      </div>
+      <div class="card-pad stack">
+        <div class="row">
+          <input type="color" id="native" class="native" value="#0969da" aria-label="Pick a color" />
+          <input
+            type="text"
+            id="input"
+            class="input mono"
+            spellcheck="false"
+            value="#0969da"
+            aria-label="Color value"
+            placeholder="#0969da, rgb(9 105 218), hsl(212 89% 45%)"
+          />
+          <button type="button" class="btn btn-sm" id="random" title="Random color">🎲</button>
+        </div>
+        <p id="error" class="flash flash-danger" hidden>Could not parse that color.</p>
+
+        <div class="sliders">
+          <label class="slider">
+            <span>Hue <b id="h-out">212</b>°</span>
+            <input type="range" id="h" min="0" max="360" step="1" value="212" />
+          </label>
+          <label class="slider">
+            <span>Saturation <b id="s-out">92</b>%</span>
+            <input type="range" id="s" min="0" max="100" step="1" value="92" />
+          </label>
+          <label class="slider">
+            <span>Lightness <b id="l-out">45</b>%</span>
+            <input type="range" id="l" min="0" max="100" step="1" value="45" />
+          </label>
+          <label class="slider">
+            <span>Alpha <b id="a-out">100</b>%</span>
+            <input type="range" id="a" min="0" max="100" step="1" value="100" />
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span class="card-title">Formats</span></div>
+      <div class="formats" id="formats"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Contrast against common backgrounds</span>
+      <span class="hint">WCAG 2.1 · normal text needs 4.5:1, large text 3:1</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="contrast">
+        <thead>
+          <tr>
+            <th>Background</th>
+            <th>Ratio</th>
+            <th>AA normal</th>
+            <th>AA large</th>
+            <th>AAA normal</th>
+            <th>Preview</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">Tints &amp; shades</span></div>
+    <div class="card-pad">
+      <div class="ramp" id="ramp"></div>
+    </div>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, esc } from '../../lib/dom';
+  import {
+    BLACK,
+    WHITE,
+    contrastRatio,
+    flatten,
+    formatRows,
+    formatRgb,
+    hslToRgb,
+    mix,
+    parseColor,
+    readableOn,
+    rgbToHex,
+    rgbToHsl,
+    type RGB,
+  } from '../../lib/color';
+
+  const inputEl = $<HTMLInputElement>('#input');
+  const nativeEl = $<HTMLInputElement>('#native');
+  const swatch = $('#swatch');
+  const errorEl = $('#error');
+  const sliders = {
+    h: $<HTMLInputElement>('#h'),
+    s: $<HTMLInputElement>('#s'),
+    l: $<HTMLInputElement>('#l'),
+    a: $<HTMLInputElement>('#a'),
+  };
+
+  let color: RGB = { r: 9, g: 105, b: 218, a: 1 };
+  /** Guards against slider/​input feedback loops while syncing controls. */
+  let syncing = false;
+
+  /** `init` syncs every control; the others skip whichever one is driving. */
+  function apply(next: RGB, source: 'text' | 'slider' | 'native' | 'init') {
+    color = next;
+    syncing = true;
+
+    const hex = rgbToHex(color, true);
+    const hsl = rgbToHsl(color);
+
+    if (source !== 'text') inputEl.value = hex;
+    if (source !== 'native') nativeEl.value = rgbToHex(color);
+    if (source !== 'slider') {
+      sliders.h.value = String(Math.round(hsl.h));
+      sliders.s.value = String(Math.round(hsl.s));
+      sliders.l.value = String(Math.round(hsl.l));
+      sliders.a.value = String(Math.round(color.a * 100));
+    }
+
+    $('#h-out').textContent = String(Math.round(hsl.h));
+    $('#s-out').textContent = String(Math.round(hsl.s));
+    $('#l-out').textContent = String(Math.round(hsl.l));
+    $('#a-out').textContent = String(Math.round(color.a * 100));
+
+    const flat = flatten(color, WHITE);
+    swatch.style.background = formatRgb(color);
+    swatch.style.color = readableOn(flat);
+    $('#swatch-label').textContent = rgbToHex(color, true).toUpperCase();
+
+    sliders.s.style.setProperty(
+      '--track',
+      `linear-gradient(90deg, ${formatRgb(hslToRgb({ ...hsl, s: 0 }))}, ${formatRgb(hslToRgb({ ...hsl, s: 100 }))})`,
+    );
+    sliders.l.style.setProperty(
+      '--track',
+      `linear-gradient(90deg, #000, ${formatRgb(hslToRgb({ ...hsl, l: 50 }))}, #fff)`,
+    );
+
+    renderFormats();
+    renderContrast();
+    renderRamp();
+    syncing = false;
+  }
+
+  function renderFormats() {
+    $('#formats').innerHTML = formatRows(color)
+      .map(
+        ([label, value]) => `<div class="format-row">
+          <span class="format-label">${esc(label)}</span>
+          <code>${esc(value)}</code>
+          <button type="button" class="btn btn-sm" data-copy-value="${esc(value)}">Copy</button>
+        </div>`,
+      )
+      .join('');
+  }
+
+  const BACKGROUNDS: [string, RGB][] = [
+    ['White', WHITE],
+    ['Black', BLACK],
+    ['GitHub light canvas #F6F8FA', { r: 246, g: 248, b: 250, a: 1 }],
+    ['GitHub dark canvas #0D1117', { r: 13, g: 17, b: 23, a: 1 }],
+    ['Mid grey #808080', { r: 128, g: 128, b: 128, a: 1 }],
+  ];
+
+  function verdict(ratio: number, threshold: number) {
+    const pass = ratio >= threshold;
+    return `<span class="badge ${pass ? 'badge-success' : 'badge-danger'}">${pass ? 'Pass' : 'Fail'}</span>`;
+  }
+
+  function renderContrast() {
+    $('#contrast tbody').innerHTML = BACKGROUNDS.map(([name, bg]) => {
+      const fg = flatten(color, bg);
+      const ratio = contrastRatio(fg, bg);
+      return `<tr>
+        <td>${esc(name)}</td>
+        <td class="mono"><strong>${ratio.toFixed(2)}:1</strong></td>
+        <td>${verdict(ratio, 4.5)}</td>
+        <td>${verdict(ratio, 3)}</td>
+        <td>${verdict(ratio, 7)}</td>
+        <td>
+          <span class="chip" style="background:${rgbToHex(bg)};color:${rgbToHex(fg)}">Sample text</span>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function renderRamp() {
+    const steps = [0.9, 0.75, 0.6, 0.45, 0.3, 0.15, 0, 0.15, 0.3, 0.45, 0.6, 0.75];
+    $('#ramp').innerHTML = steps
+      .map((amount, i) => {
+        const shade = i < 6 ? mix(color, WHITE, amount) : i === 6 ? color : mix(color, BLACK, amount);
+        const hex = rgbToHex(shade);
+        const label = i < 6 ? `+${Math.round(amount * 100)}% white` : i === 6 ? 'base' : `+${Math.round(amount * 100)}% black`;
+        return `<button type="button" class="ramp-step" style="background:${hex};color:${readableOn(shade)}" data-copy-value="${hex}" title="${label}">
+          <span>${hex.toUpperCase().slice(1)}</span>
+        </button>`;
+      })
+      .join('');
+  }
+
+  function fromText() {
+    if (syncing) return;
+    const parsed = parseColor(inputEl.value);
+    errorEl.hidden = !!parsed;
+    inputEl.classList.toggle('is-invalid', !parsed);
+    if (parsed) apply(parsed, 'text');
+  }
+
+  function fromSliders() {
+    if (syncing) return;
+    apply(
+      hslToRgb({
+        h: Number(sliders.h.value),
+        s: Number(sliders.s.value),
+        l: Number(sliders.l.value),
+        a: Number(sliders.a.value) / 100,
+      }),
+      'slider',
+    );
+  }
+
+  inputEl.addEventListener('input', fromText);
+  nativeEl.addEventListener('input', () => {
+    if (syncing) return;
+    const parsed = parseColor(nativeEl.value);
+    if (parsed) apply({ ...parsed, a: color.a }, 'native');
+  });
+  for (const slider of Object.values(sliders)) slider.addEventListener('input', fromSliders);
+
+  $('#random').addEventListener('click', () => {
+    apply(
+      {
+        r: Math.floor(Math.random() * 256),
+        g: Math.floor(Math.random() * 256),
+        b: Math.floor(Math.random() * 256),
+        a: 1,
+      },
+      'slider',
+    );
+  });
+
+  apply(color, 'init');
+</script>
+
+<style>
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .preview-card {
+    overflow: hidden;
+  }
+
+  .swatch {
+    display: grid;
+    place-items: center;
+    height: 150px;
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background-image: linear-gradient(45deg, #ccc 25%, transparent 25%),
+      linear-gradient(-45deg, #ccc 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #ccc 75%),
+      linear-gradient(-45deg, transparent 75%, #ccc 75%);
+    background-size: 16px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .native {
+    width: 46px;
+    height: 32px;
+    padding: 2px;
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .row .input {
+    flex: 1;
+    min-width: 140px;
+  }
+
+  .sliders {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .slider {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--fg-muted);
+  }
+
+  .slider b {
+    color: var(--fg);
+    font-family: var(--font-mono);
+  }
+
+  .slider input[type='range'] {
+    width: 100%;
+    height: 8px;
+    appearance: none;
+    border-radius: var(--radius-full);
+    background: var(--track, var(--canvas-subtle));
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+
+  #h {
+    --track: linear-gradient(
+      90deg,
+      #f00 0%,
+      #ff0 17%,
+      #0f0 33%,
+      #0ff 50%,
+      #00f 67%,
+      #f0f 83%,
+      #f00 100%
+    );
+  }
+
+  #a {
+    --track: linear-gradient(90deg, transparent, var(--fg));
+  }
+
+  .slider input[type='range']::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--canvas);
+    border: 2px solid var(--fg);
+    border-radius: 50%;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .slider input[type='range']::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: var(--canvas);
+    border: 2px solid var(--fg);
+    border-radius: 50%;
+  }
+
+  .formats :global(.format-row) {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 16px;
+    border-bottom: 1px solid var(--border-muted);
+  }
+
+  .formats :global(.format-row:last-child) {
+    border-bottom: none;
+  }
+
+  .formats :global(.format-label) {
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--fg-muted);
+  }
+
+  .formats :global(code) {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    word-break: break-all;
+  }
+
+  :global(.chip) {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .ramp {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  .ramp :global(.ramp-step) {
+    height: 62px;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    display: grid;
+    place-items: center;
+    transition: transform 0.12s ease;
+  }
+
+  .ramp :global(.ramp-step:hover) {
+    transform: scaleY(1.12);
+    z-index: 1;
+  }
+
+  @media (max-width: 900px) {
+    .split {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ramp {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .formats :global(.format-row) {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .formats :global(.format-label) {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

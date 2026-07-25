@@ -1,0 +1,366 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+
+---
+
+<ToolLayout slug="timestamp-converter">
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Now</span>
+      <div class="row">
+        <span class="badge badge-neutral" id="local-zone"></span>
+        <button type="button" class="btn btn-sm" id="use-now">Use current time</button>
+      </div>
+    </div>
+    <div class="card-pad">
+      <div class="now-grid">
+        <div class="now-cell">
+          <span>Unix seconds</span>
+          <strong id="now-s">—</strong>
+          <button type="button" class="btn btn-sm" id="copy-now-s">Copy</button>
+        </div>
+        <div class="now-cell">
+          <span>Unix milliseconds</span>
+          <strong id="now-ms">—</strong>
+          <button type="button" class="btn btn-sm" id="copy-now-ms">Copy</button>
+        </div>
+        <div class="now-cell">
+          <span>ISO 8601 (UTC)</span>
+          <strong id="now-iso">—</strong>
+          <button type="button" class="btn btn-sm" id="copy-now-iso">Copy</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Convert</span>
+      <span class="badge badge-neutral" id="detected">—</span>
+    </div>
+    <div class="card-pad stack">
+      <input
+        id="input"
+        class="input mono big"
+        type="text"
+        spellcheck="false"
+        autocomplete="off"
+        placeholder="1735689600, 1735689600000, 2025-01-01T00:00:00Z, or “tomorrow 09:00”…"
+      />
+      <div class="row">
+        <button type="button" class="btn btn-sm js-quick" data-offset="0">Now</button>
+        <button type="button" class="btn btn-sm js-quick" data-offset="-3600">−1 hour</button>
+        <button type="button" class="btn btn-sm js-quick" data-offset="3600">+1 hour</button>
+        <button type="button" class="btn btn-sm js-quick" data-offset="86400">+1 day</button>
+        <button type="button" class="btn btn-sm js-quick" data-offset="604800">+1 week</button>
+        <button type="button" class="btn btn-sm js-quick" data-offset="2592000">+30 days</button>
+        <button type="button" class="btn btn-sm" id="epoch">Unix epoch</button>
+      </div>
+      <p id="error" class="flash flash-danger" hidden></p>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head"><span class="card-title">Formats</span></div>
+      <div class="table-wrap">
+        <table class="data">
+          <tbody id="formats"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span class="card-title">Date parts</span></div>
+      <div class="table-wrap">
+        <table class="data">
+          <tbody id="parts"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Around the world</span>
+      <select id="extra-zone" class="select zone-select" aria-label="Add a timezone">
+        <option value="">Add a timezone…</option>
+      </select>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="zones">
+        <thead>
+          <tr><th>Zone</th><th>Local time</th><th>Offset</th><th>Abbrev.</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, $$, copyText, esc, flashButton, live } from '../../lib/dom';
+  import {
+    dayOfYear,
+    isLeap,
+    isoWeek,
+    localIso,
+    parseInput,
+    relative,
+    sqlDatetime,
+  } from '../../lib/time';
+
+  const inputEl = $<HTMLInputElement>('#input');
+  const errorEl = $('#error');
+  const detectedEl = $('#detected');
+
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  $('#local-zone').textContent = localZone;
+
+  const BASE_ZONES = [
+    'UTC',
+    'America/Los_Angeles',
+    'America/New_York',
+    'Europe/London',
+    'Europe/Madrid',
+    'Asia/Kolkata',
+    'Asia/Tokyo',
+    'Australia/Sydney',
+  ];
+  const zones = new Set<string>([localZone, ...BASE_ZONES]);
+
+  // Offer the full IANA list where the browser exposes it.
+  const supported = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] })
+    .supportedValuesOf;
+  const allZones: string[] = supported ? supported('timeZone') : [...zones];
+  const select = $<HTMLSelectElement>('#extra-zone');
+  select.append(
+    ...allZones.map((zone) => {
+      const option = document.createElement('option');
+      option.value = zone;
+      option.textContent = zone;
+      return option;
+    }),
+  );
+
+  let current = new Date();
+
+  function rowsHtml(rows: [string, string][]): string {
+    return rows
+      .map(
+        ([label, value]) => `<tr>
+          <td class="key">${esc(label)}</td>
+          <td class="mono val">${esc(value)}</td>
+          <td class="act"><button type="button" class="btn btn-sm" data-copy-value="${esc(value)}">Copy</button></td>
+        </tr>`,
+      )
+      .join('');
+  }
+
+  function offsetOf(date: Date, zone: string): string {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      timeZoneName: 'longOffset',
+    }).formatToParts(date);
+    return parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
+  }
+
+  function abbrevOf(date: Date, zone: string): string {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      timeZoneName: 'short',
+    }).formatToParts(date);
+    return parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
+  }
+
+  function renderZones(date: Date) {
+    $('#zones tbody').innerHTML = [...zones]
+      .map((zone) => {
+        const formatted = new Intl.DateTimeFormat(undefined, {
+          dateStyle: 'medium',
+          timeStyle: 'medium',
+          timeZone: zone,
+        }).format(date);
+        return `<tr>
+          <td>${esc(zone)}${zone === localZone ? ' <span class="badge badge-accent">you</span>' : ''}</td>
+          <td class="mono">${esc(formatted)}</td>
+          <td class="mono dim">${esc(offsetOf(date, zone))}</td>
+          <td class="mono dim">${esc(abbrevOf(date, zone))}</td>
+        </tr>`;
+      })
+      .join('');
+  }
+
+  function render(date: Date) {
+    current = date;
+    const seconds = Math.floor(date.getTime() / 1000);
+
+    $('#formats').innerHTML = rowsHtml([
+      ['Unix seconds', String(seconds)],
+      ['Unix milliseconds', String(date.getTime())],
+      ['ISO 8601 (UTC)', date.toISOString()],
+      ['ISO 8601 (local)', localIso(date)],
+      ['RFC 2822', date.toUTCString()],
+      ['Local string', date.toString()],
+      ['Date only', date.toISOString().slice(0, 10)],
+      ['Time only', date.toISOString().slice(11, 19)],
+      ['Relative', relative(date)],
+      ['SQL DATETIME', sqlDatetime(date)],
+    ]);
+
+    const weekNumber = isoWeek(date);
+    $('#parts').innerHTML = rowsHtml([
+      ['Year', String(date.getFullYear())],
+      ['Month', `${date.getMonth() + 1} (${date.toLocaleString(undefined, { month: 'long' })})`],
+      ['Day of month', String(date.getDate())],
+      ['Day of week', `${date.getDay()} (${date.toLocaleString(undefined, { weekday: 'long' })})`],
+      ['Day of year', String(dayOfYear(date))],
+      ['ISO week', `${weekNumber.year}-W${String(weekNumber.week).padStart(2, '0')}`],
+      ['Quarter', `Q${Math.floor(date.getMonth() / 3) + 1}`],
+      ['Hours / minutes / seconds', `${date.getHours()} / ${date.getMinutes()} / ${date.getSeconds()}`],
+      ['Milliseconds', String(date.getMilliseconds())],
+      ['UTC offset', `${-date.getTimezoneOffset() / 60} h`],
+      ['Leap year', String(isLeap(date.getFullYear()))],
+    ]);
+
+    renderZones(date);
+  }
+
+  function run() {
+    const parsed = parseInput(inputEl.value);
+    if (!inputEl.value.trim()) {
+      errorEl.hidden = true;
+      inputEl.classList.remove('is-invalid');
+      detectedEl.textContent = 'Waiting for input';
+      detectedEl.className = 'badge badge-neutral';
+      render(new Date());
+      return;
+    }
+
+    if (!parsed || Number.isNaN(parsed.date.getTime())) {
+      inputEl.classList.add('is-invalid');
+      errorEl.hidden = false;
+      errorEl.textContent = 'Could not understand that value. Try a Unix timestamp or an ISO date.';
+      detectedEl.textContent = 'Unrecognised';
+      detectedEl.className = 'badge badge-danger';
+      return;
+    }
+
+    inputEl.classList.remove('is-invalid');
+    errorEl.hidden = true;
+    detectedEl.textContent = `Detected: ${parsed.kind}`;
+    detectedEl.className = 'badge badge-success';
+    render(parsed.date);
+  }
+
+  function tickNow() {
+    const now = new Date();
+    $('#now-s').textContent = String(Math.floor(now.getTime() / 1000));
+    $('#now-ms').textContent = String(now.getTime());
+    $('#now-iso').textContent = now.toISOString();
+  }
+
+  const copyFrom = (buttonId: string, sourceId: string) =>
+    $(buttonId).addEventListener('click', async (event) => {
+      const ok = await copyText($(sourceId).textContent ?? '');
+      flashButton(event.currentTarget as HTMLElement, ok ? 'Copied' : 'Failed');
+    });
+
+  copyFrom('#copy-now-s', '#now-s');
+  copyFrom('#copy-now-ms', '#now-ms');
+  copyFrom('#copy-now-iso', '#now-iso');
+
+  $('#use-now').addEventListener('click', () => {
+    inputEl.value = String(Math.floor(Date.now() / 1000));
+    run();
+  });
+
+  $('#epoch').addEventListener('click', () => {
+    inputEl.value = '0';
+    run();
+  });
+
+  $$('.js-quick').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const base = inputEl.value.trim() ? current.getTime() : Date.now();
+      inputEl.value = String(Math.floor((base + Number(btn.dataset.offset) * 1000) / 1000));
+      run();
+    }),
+  );
+
+  select.addEventListener('change', () => {
+    if (!select.value) return;
+    zones.add(select.value);
+    renderZones(current);
+    select.value = '';
+  });
+
+  tickNow();
+  window.setInterval(tickNow, 1000);
+  live([inputEl], run);
+</script>
+
+<style>
+  .big {
+    font-size: 16px;
+    padding: 9px 14px;
+  }
+
+  .now-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px;
+  }
+
+  .now-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 14px;
+    background: var(--canvas-subtle);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+  }
+
+  .now-cell span {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+  }
+
+  .now-cell strong {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 600;
+    word-break: break-all;
+  }
+
+  .now-cell .btn {
+    align-self: flex-start;
+    margin-top: 4px;
+  }
+
+  .zone-select {
+    width: 220px;
+    height: 28px;
+    padding-top: 0;
+    padding-bottom: 0;
+    font-size: 12.5px;
+  }
+
+  :global(.key) {
+    width: 40%;
+    color: var(--fg-muted);
+    white-space: nowrap;
+  }
+
+  :global(.val) {
+    word-break: break-all;
+  }
+
+  :global(.act) {
+    width: 1%;
+    text-align: right;
+  }
+</style>

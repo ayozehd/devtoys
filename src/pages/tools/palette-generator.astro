@@ -1,0 +1,331 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+---
+
+<ToolLayout slug="palette-generator">
+  <section class="card card-pad">
+    <div class="toolbar">
+      <div class="field">
+        <label class="label" for="base">Base color</label>
+        <div class="row">
+          <input type="color" id="base" class="native" value="#0969da" />
+          <input type="text" id="base-text" class="input mono base-text" value="#0969da" spellcheck="false" />
+          <button type="button" class="btn btn-sm" id="random">Random</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">Harmony</span>
+        <div class="segmented" id="harmony">
+          <button type="button" data-value="complementary" aria-selected="true">Complementary</button>
+          <button type="button" data-value="analogous">Analogous</button>
+          <button type="button" data-value="triadic">Triadic</button>
+          <button type="button" data-value="tetradic">Tetradic</button>
+          <button type="button" data-value="split">Split</button>
+          <button type="button" data-value="mono">Monochrome</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Harmony</span>
+      <span class="hint" id="harmony-hint"></span>
+    </div>
+    <div class="card-pad">
+      <div class="swatches" id="harmony-out"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Tonal scale</span>
+      <span class="hint">50 → 950, the shape most design systems expect</span>
+    </div>
+    <div class="card-pad">
+      <div class="scale" id="scale"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Gradients</span>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="gradient-angle" /><span>Diagonal (135°)</span></label>
+      </div>
+    </div>
+    <div class="card-pad">
+      <div class="gradients" id="gradients"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="segmented" id="export-format">
+        <button type="button" data-value="css" aria-selected="true">CSS variables</button>
+        <button type="button" data-value="scss">SCSS</button>
+        <button type="button" data-value="tailwind">Tailwind</button>
+        <button type="button" data-value="json">JSON</button>
+      </div>
+      <button type="button" class="btn btn-sm" data-copy-target="export-out">Copy</button>
+    </div>
+    <pre id="export-out" class="output"></pre>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, esc, live, segmented } from '../../lib/dom';
+  import {
+    BLACK,
+    WHITE,
+    formatHsl,
+    hslToRgb,
+    mix,
+    parseColor,
+    readableOn,
+    rgbToHex,
+    rgbToHsl,
+    type RGB,
+  } from '../../lib/color';
+  import {
+    HARMONY_HINTS,
+    exportPalette,
+    harmonyColors,
+    scaleColors,
+    type ExportFormat,
+    type Harmony,
+    type Swatch,
+  } from '../../lib/palette';
+
+  const baseEl = $<HTMLInputElement>('#base');
+  const baseTextEl = $<HTMLInputElement>('#base-text');
+  const angleEl = $<HTMLInputElement>('#gradient-angle');
+
+  let base: RGB = { r: 9, g: 105, b: 218, a: 1 };
+  let harmony: Harmony = 'complementary';
+  let exportFormat: ExportFormat = 'css';
+
+  function swatchHtml(color: RGB, label: string, sub = ''): string {
+    const hex = rgbToHex(color).toUpperCase();
+    return `<button type="button" class="swatch-btn" style="background:${hex};color:${readableOn(color)}" data-copy-value="${hex}" title="Copy ${hex}">
+      <span class="swatch-label">${esc(label)}</span>
+      <span class="swatch-hex">${hex}</span>
+      ${sub ? `<span class="swatch-sub">${esc(sub)}</span>` : ''}
+    </button>`;
+  }
+
+  function renderGradients(harmonies: Swatch[]) {
+    const angle = angleEl.checked ? '135deg' : '90deg';
+    const baseHex = rgbToHex(base);
+    const partner = rgbToHex(harmonies[harmonies.length - 1].color);
+    const hsl = rgbToHsl(base);
+
+    const defs: [string, string][] = [
+      ['Base → harmony', `linear-gradient(${angle}, ${baseHex}, ${partner})`],
+      ['Light → dark', `linear-gradient(${angle}, ${rgbToHex(mix(base, WHITE, 0.7))}, ${rgbToHex(mix(base, BLACK, 0.5))})`],
+      [
+        'Hue sweep',
+        `linear-gradient(${angle}, ${rgbToHex(hslToRgb({ ...hsl, h: (hsl.h + 330) % 360 }))}, ${baseHex}, ${rgbToHex(hslToRgb({ ...hsl, h: (hsl.h + 30) % 360 }))})`,
+      ],
+      ['Fade to transparent', `linear-gradient(${angle}, ${baseHex}, ${formatHsl({ ...base, a: 0 })})`],
+      ['Radial glow', `radial-gradient(circle at 30% 30%, ${rgbToHex(mix(base, WHITE, 0.45))}, ${baseHex} 60%, ${rgbToHex(mix(base, BLACK, 0.4))})`],
+      ['Mesh-ish', `conic-gradient(from ${Math.round(hsl.h)}deg, ${baseHex}, ${partner}, ${rgbToHex(mix(base, WHITE, 0.5))}, ${baseHex})`],
+    ];
+
+    $('#gradients').innerHTML = defs
+      .map(
+        ([label, css]) => `<div class="gradient">
+          <div class="gradient-preview" style="background-image:${css}"></div>
+          <div class="gradient-meta">
+            <strong>${esc(label)}</strong>
+            <code>${esc(css)}</code>
+          </div>
+          <button type="button" class="btn btn-sm" data-copy-value="${esc(`background-image: ${css};`)}">Copy</button>
+        </div>`,
+      )
+      .join('');
+  }
+
+  function render() {
+    const harmonies = harmonyColors(base, harmony);
+    const scale = scaleColors(base);
+
+    $('#harmony-hint').textContent = HARMONY_HINTS[harmony];
+    $('#harmony-out').innerHTML = harmonies
+      .map(({ label, color }) => swatchHtml(color, label, formatHsl(color)))
+      .join('');
+    $('#scale').innerHTML = scale.map(({ step, color }) => swatchHtml(color, String(step), '')).join('');
+
+    renderGradients(harmonies);
+    $('#export-out').textContent = exportPalette(exportFormat, base, scale, harmonies);
+  }
+
+  function setBase(value: string, from: 'picker' | 'text') {
+    const parsed = parseColor(value);
+    baseTextEl.classList.toggle('is-invalid', !parsed);
+    if (!parsed) return;
+    base = { ...parsed, a: 1 };
+    if (from === 'text') baseEl.value = rgbToHex(base);
+    else baseTextEl.value = rgbToHex(base);
+    render();
+  }
+
+  baseEl.addEventListener('input', () => setBase(baseEl.value, 'picker'));
+  baseTextEl.addEventListener('input', () => setBase(baseTextEl.value, 'text'));
+
+  $('#random').addEventListener('click', () => {
+    const hex = rgbToHex(
+      hslToRgb({
+        h: Math.random() * 360,
+        s: 55 + Math.random() * 40,
+        l: 40 + Math.random() * 20,
+        a: 1,
+      }),
+    );
+    setBase(hex, 'text');
+    baseTextEl.value = hex;
+  });
+
+  segmented($('#harmony'), (value) => {
+    harmony = value as Harmony;
+    render();
+  });
+
+  segmented($('#export-format'), (value) => {
+    exportFormat = value as ExportFormat;
+    render();
+  });
+
+  live([angleEl], render);
+</script>
+
+<style>
+  .toolbar {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+
+  .native {
+    width: 46px;
+    height: 32px;
+    padding: 2px;
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .base-text {
+    width: 130px;
+  }
+
+  .swatches {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+  }
+
+  .scale {
+    display: grid;
+    grid-template-columns: repeat(11, minmax(0, 1fr));
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  :global(.swatch-btn) {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 14px 10px;
+    min-height: 84px;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font-mono);
+    transition: transform 0.12s ease;
+  }
+
+  .swatches :global(.swatch-btn) {
+    border-radius: var(--radius-sm);
+    justify-content: flex-end;
+  }
+
+  :global(.swatch-btn:hover) {
+    transform: translateY(-2px);
+    z-index: 1;
+    box-shadow: var(--shadow-md);
+  }
+
+  :global(.swatch-label) {
+    font-size: 11px;
+    opacity: 0.85;
+  }
+
+  :global(.swatch-hex) {
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  :global(.swatch-sub) {
+    font-size: 10px;
+    opacity: 0.7;
+  }
+
+  .gradients {
+    display: grid;
+    gap: 10px;
+  }
+
+  .gradients :global(.gradient) {
+    display: grid;
+    grid-template-columns: 120px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 8px;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+  }
+
+  .gradients :global(.gradient-preview) {
+    height: 46px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-muted);
+  }
+
+  .gradients :global(.gradient-meta) {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .gradients :global(.gradient-meta strong) {
+    font-size: 13px;
+  }
+
+  .gradients :global(.gradient-meta code) {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--fg-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 760px) {
+    .scale {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .gradients :global(.gradient) {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .gradients :global(.gradient-preview) {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

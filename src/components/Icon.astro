@@ -1,0 +1,25 @@
+---
+import { iconBody } from '../lib/icons';
+
+interface Props {
+  /** RemixIcon name, e.g. `braces-line`. */
+  name: string;
+  size?: number;
+  class?: string;
+}
+
+const { name, size = 16, class: className } = Astro.props;
+const body = iconBody(name);
+---
+
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 24 24"
+  width={size}
+  height={size}
+  fill="currentColor"
+  aria-hidden="true"
+  focusable="false"
+  class={className}
+  set:html={body}
+/>

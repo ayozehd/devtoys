@@ -1,0 +1,22 @@
+---
+import Icon from './Icon.astro';
+
+interface Props {
+  /** id of the element whose text (or value) gets copied */
+  target: string;
+  label?: string;
+  class?: string;
+}
+
+const { target, label = 'Copy', class: className } = Astro.props;
+---
+
+<button
+  type="button"
+  class:list={['btn btn-sm js-copy', className]}
+  data-copy-target={target}
+  data-copy-label={label}
+>
+  <Icon name="file-copy-line" size={14} />
+  <span>{label}</span>
+</button>

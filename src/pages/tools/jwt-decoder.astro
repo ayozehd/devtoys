@@ -1,0 +1,232 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import CopyButton from '../../components/CopyButton.astro';
+
+const SAMPLE =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImRldnRveXMtMSJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkYSBMb3ZlbGFjZSIsImVtYWlsIjoiYWRhQGV4YW1wbGUuY29tIiwicm9sZXMiOlsiYWRtaW4iLCJyZWFkZXIiXSwiaXNzIjoiaHR0cHM6Ly9hdXRoLmV4YW1wbGUuY29tIiwiYXVkIjoiZGV2dG95cy1hcHAiLCJpYXQiOjE3MzU2ODk2MDAsIm5iZiI6MTczNTY4OTYwMCwiZXhwIjoyMDUxMjIyNDAwLCJqdGkiOiJhYmMxMjMifQ.7cH1qy0K1Rm7g0Xj0R1Zk3Vp1G3xkKcJZ0Q9d1B2m4A';
+---
+
+<ToolLayout slug="jwt-decoder">
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Token</span>
+      <div class="row">
+        <span class="badge badge-neutral" id="status">Waiting</span>
+        <button type="button" class="btn btn-sm" id="sample" data-sample={SAMPLE}>Load sample</button>
+        <button type="button" class="btn btn-sm" id="clear">Clear</button>
+      </div>
+    </div>
+    <div class="card-pad stack">
+      <textarea
+        id="token"
+        class="textarea token"
+        rows="5"
+        spellcheck="false"
+        placeholder="Paste a JWT — header.payload.signature"></textarea>
+      <div id="colored" class="colored mono" aria-hidden="true"></div>
+      <p id="error" class="flash flash-danger" hidden></p>
+      <p class="flash flash-attention">
+        This tool only <strong>decodes</strong>. It does not verify the signature, so never trust a
+        token's contents based on what you see here. Nothing is sent anywhere — decoding happens in
+        this tab.
+      </p>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Header</span>
+        <CopyButton target="header-out" />
+      </div>
+      <pre id="header-out" class="output"></pre>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Payload</span>
+        <CopyButton target="payload-out" />
+      </div>
+      <pre id="payload-out" class="output"></pre>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Registered claims</span>
+      <span class="badge badge-neutral" id="expiry"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="claims">
+        <thead>
+          <tr><th>Claim</th><th>Name</th><th>Value</th><th>Meaning</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty" id="no-claims">Decode a token to see its claims.</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Signature</span>
+      <CopyButton target="signature-out" />
+    </div>
+    <div class="card-pad stack">
+      <pre id="signature-out" class="output boxed"></pre>
+      <p class="hint" id="alg-note"></p>
+    </div>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, esc, live } from '../../lib/dom';
+  import {
+    CLAIMS,
+    algorithmNote,
+    decodeJwt,
+    expiryStatus,
+    formatClaim,
+    normalizeToken,
+    type DecodedJwt,
+  } from '../../lib/jwt';
+
+  const tokenEl = $<HTMLTextAreaElement>('#token');
+  const errorEl = $('#error');
+  const statusEl = $('#status');
+  const coloredEl = $('#colored');
+
+  const SAMPLE = $('#sample').dataset.sample ?? '';
+
+  function fail(message: string) {
+    tokenEl.classList.add('is-invalid');
+    errorEl.hidden = false;
+    errorEl.textContent = message;
+    statusEl.textContent = 'Invalid';
+    statusEl.className = 'badge badge-danger';
+  }
+
+  function reset() {
+    $('#header-out').textContent = '';
+    $('#payload-out').textContent = '';
+    $('#signature-out').textContent = '';
+    $('#claims tbody').innerHTML = '';
+    $('#no-claims').hidden = false;
+    $('#expiry').textContent = '';
+    $('#alg-note').textContent = '';
+    coloredEl.innerHTML = '';
+  }
+
+  function run() {
+    const token = normalizeToken(tokenEl.value);
+
+    if (!token) {
+      tokenEl.classList.remove('is-invalid');
+      errorEl.hidden = true;
+      statusEl.textContent = 'Waiting';
+      statusEl.className = 'badge badge-neutral';
+      reset();
+      return;
+    }
+
+    let decoded: DecodedJwt;
+    try {
+      decoded = decodeJwt(token);
+    } catch (err) {
+      reset();
+      fail((err as Error).message);
+      return;
+    }
+
+    const { header, payload, parts } = decoded;
+
+    tokenEl.classList.remove('is-invalid');
+    errorEl.hidden = true;
+    statusEl.textContent = 'Decoded';
+    statusEl.className = 'badge badge-success';
+
+    coloredEl.innerHTML = `<span class="seg-h">${esc(parts[0])}</span><span class="dot">.</span><span class="seg-p">${esc(
+      parts[1],
+    )}</span><span class="dot">.</span><span class="seg-s">${esc(parts[2])}</span>`;
+
+    $('#header-out').textContent = JSON.stringify(header, null, 2);
+    $('#payload-out').textContent = JSON.stringify(payload, null, 2);
+    $('#signature-out').textContent = decoded.signature;
+    $('#alg-note').textContent = algorithmNote(header);
+
+    const expiry = expiryStatus(payload);
+    $('#expiry').textContent = expiry.label;
+    $('#expiry').className = `badge ${expiry.badge}`;
+
+    const entries = [
+      ...Object.entries(header).map(([k, v]) => [k, v, 'header'] as const),
+      ...Object.entries(payload).map(([k, v]) => [k, v, 'payload'] as const),
+    ];
+
+    $('#no-claims').hidden = entries.length > 0;
+    $('#claims tbody').innerHTML = entries
+      .map(([key, value, where]) => {
+        const meta = CLAIMS[key];
+        return `<tr>
+          <td class="mono"><strong>${esc(key)}</strong> <span class="badge badge-neutral">${where}</span></td>
+          <td>${esc(meta?.name ?? '—')}</td>
+          <td class="mono val">${esc(formatClaim(key, value))}</td>
+          <td class="dim">${esc(meta?.meaning ?? 'Custom claim.')}</td>
+        </tr>`;
+      })
+      .join('');
+  }
+
+  $('#sample').addEventListener('click', () => {
+    tokenEl.value = SAMPLE;
+    run();
+  });
+
+  $('#clear').addEventListener('click', () => {
+    tokenEl.value = '';
+    run();
+    tokenEl.focus();
+  });
+
+  live([tokenEl], run);
+</script>
+
+<style>
+  .token {
+    min-height: 110px;
+    word-break: break-all;
+  }
+
+  .colored {
+    padding: 10px 12px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    word-break: break-all;
+    background: var(--canvas-subtle);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    min-height: 42px;
+  }
+
+  .colored :global(.seg-h) {
+    color: var(--danger-fg);
+  }
+
+  .colored :global(.seg-p) {
+    color: var(--done-fg);
+  }
+
+  .colored :global(.seg-s) {
+    color: var(--accent-fg);
+  }
+
+  .colored :global(.dot) {
+    color: var(--fg-subtle);
+  }
+
+  .boxed {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    min-height: 56px;
+  }
+</style>

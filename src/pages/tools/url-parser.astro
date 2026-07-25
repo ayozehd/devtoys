@@ -1,0 +1,273 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import CopyButton from '../../components/CopyButton.astro';
+
+const SAMPLE =
+  'https://user:s3cret@shop.example.co.uk:8443/catalog/shoes/running?q=trail%20runner&size=42&color=blue&color=black&utm_source=newsletter#reviews';
+---
+
+<ToolLayout slug="url-parser">
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">URL</span>
+      <div class="row">
+        <span class="badge badge-neutral" id="status">Ready</span>
+        <button type="button" class="btn btn-sm" id="sample">Load sample</button>
+        <CopyButton target="url" label="Copy URL" />
+      </div>
+    </div>
+    <div class="card-pad">
+      <textarea id="url" class="textarea url-input" rows="3" spellcheck="false"
+        placeholder="https://example.com/path?query=value#hash">{SAMPLE}</textarea
+      >
+      <p id="error" class="flash flash-danger error-gap" hidden></p>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head"><span class="card-title">Components</span></div>
+      <div class="table-wrap">
+        <table class="data">
+          <tbody id="parts"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span class="card-title">Path segments</span></div>
+      <div class="table-wrap">
+        <table class="data">
+          <tbody id="segments"></tbody>
+        </table>
+        <p class="empty" id="no-segments" hidden>No path segments.</p>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Query parameters</span>
+      <div class="row">
+        <span class="badge badge-neutral" id="param-count">0</span>
+        <button type="button" class="btn btn-sm" id="add-param">Add parameter</button>
+        <button type="button" class="btn btn-sm" id="sort-params">Sort by name</button>
+      </div>
+    </div>
+    <div class="params" id="params"></div>
+    <p class="empty" id="no-params" hidden>No query parameters.</p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Rebuilt URL</span>
+      <CopyButton target="rebuilt" label="Copy" />
+    </div>
+    <pre id="rebuilt" class="output"></pre>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, esc, live } from '../../lib/dom';
+  import {
+    PART_LABELS,
+    parseUrl,
+    pathSegments,
+    queryParams,
+    rebuildUrl,
+    safeDecode,
+  } from '../../lib/urls';
+
+  const urlEl = $<HTMLTextAreaElement>('#url');
+  const errorEl = $('#error');
+  const statusEl = $('#status');
+  const partsEl = $('#parts');
+  const segmentsEl = $('#segments');
+  const paramsEl = $('#params');
+  const rebuiltEl = $('#rebuilt');
+
+  const SAMPLE = urlEl.value;
+  /** Live parameter list — the source of truth while editing. */
+  let params: [string, string][] = [];
+  let current: URL | null = null;
+
+  function renderParts(url: URL) {
+    partsEl.innerHTML = PART_LABELS.map(([key, label]) => {
+      const raw = String(url[key] ?? '');
+      const decoded = safeDecode(raw);
+      const differs = decoded !== raw;
+      return `<tr>
+        <td class="part-key">${esc(label)}</td>
+        <td class="mono part-val">${raw ? esc(raw) : '<span class="dim">—</span>'}${
+          differs ? `<div class="decoded">decoded: ${esc(decoded)}</div>` : ''
+        }</td>
+        <td class="part-copy">${
+          raw ? `<button type="button" class="btn btn-sm" data-copy-value="${esc(raw)}">Copy</button>` : ''
+        }</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function renderSegments(url: URL) {
+    const segs = pathSegments(url);
+    $('#no-segments').hidden = segs.length > 0;
+    segmentsEl.innerHTML = segs
+      .map(
+        (seg, i) => `<tr>
+          <td class="mono dim">${i + 1}</td>
+          <td class="mono">${esc(seg)}</td>
+        </tr>`,
+      )
+      .join('');
+  }
+
+  function renderParams() {
+    $('#no-params').hidden = params.length > 0;
+    $('#param-count').textContent = `${params.length} param${params.length === 1 ? '' : 's'}`;
+    paramsEl.innerHTML = params
+      .map(
+        ([k, v], i) => `<div class="param-row">
+          <input class="input mono js-key" data-i="${i}" value="${esc(k)}" aria-label="Parameter name" placeholder="name" />
+          <input class="input mono js-value" data-i="${i}" value="${esc(v)}" aria-label="Parameter value" placeholder="value" />
+          <button type="button" class="btn btn-sm btn-danger js-remove" data-i="${i}" aria-label="Remove ${esc(k)}">Remove</button>
+        </div>`,
+      )
+      .join('');
+  }
+
+  function rebuild() {
+    if (!current) return;
+    rebuiltEl.textContent = rebuildUrl(current, params);
+  }
+
+  function run() {
+    const raw = urlEl.value.trim();
+    if (!raw) {
+      statusEl.textContent = 'Ready';
+      statusEl.className = 'badge badge-neutral';
+      errorEl.hidden = true;
+      urlEl.classList.remove('is-invalid');
+      partsEl.innerHTML = '';
+      segmentsEl.innerHTML = '';
+      params = [];
+      renderParams();
+      rebuiltEl.textContent = '';
+      current = null;
+      return;
+    }
+
+    let url: URL;
+    try {
+      url = parseUrl(raw);
+    } catch (err) {
+      statusEl.textContent = 'Invalid';
+      statusEl.className = 'badge badge-danger';
+      urlEl.classList.add('is-invalid');
+      errorEl.hidden = false;
+      errorEl.textContent = `Not a valid URL: ${(err as Error).message}`;
+      return;
+    }
+
+    current = url;
+    urlEl.classList.remove('is-invalid');
+    errorEl.hidden = true;
+    statusEl.textContent = 'Valid';
+    statusEl.className = 'badge badge-success';
+
+    params = queryParams(url);
+    renderParts(url);
+    renderSegments(url);
+    renderParams();
+    rebuild();
+  }
+
+  paramsEl.addEventListener('input', (event) => {
+    const el = event.target as HTMLInputElement;
+    const i = Number(el.dataset.i);
+    if (Number.isNaN(i) || !params[i]) return;
+    if (el.classList.contains('js-key')) params[i][0] = el.value;
+    if (el.classList.contains('js-value')) params[i][1] = el.value;
+    rebuild();
+  });
+
+  paramsEl.addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLElement>('.js-remove');
+    if (!btn) return;
+    params.splice(Number(btn.dataset.i), 1);
+    renderParams();
+    rebuild();
+  });
+
+  $('#add-param').addEventListener('click', () => {
+    params.push(['', '']);
+    renderParams();
+    rebuild();
+    paramsEl.querySelector<HTMLInputElement>('.param-row:last-child .js-key')?.focus();
+  });
+
+  $('#sort-params').addEventListener('click', () => {
+    params.sort((a, b) => a[0].localeCompare(b[0]));
+    renderParams();
+    rebuild();
+  });
+
+  $('#sample').addEventListener('click', () => {
+    urlEl.value = SAMPLE;
+    run();
+  });
+
+  live([urlEl], run);
+</script>
+
+<style>
+  .url-input {
+    min-height: 72px;
+  }
+
+  .error-gap {
+    margin-top: 12px;
+  }
+
+  #parts :global(.part-key) {
+    width: 150px;
+    color: var(--fg-muted);
+    white-space: nowrap;
+  }
+
+  #parts :global(.part-val) {
+    word-break: break-all;
+  }
+
+  #parts :global(.decoded) {
+    margin-top: 2px;
+    font-size: 11.5px;
+    color: var(--fg-subtle);
+  }
+
+  #parts :global(.part-copy) {
+    width: 1%;
+    text-align: right;
+  }
+
+  .params :global(.param-row) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border-muted);
+  }
+
+  .params :global(.param-row:last-child) {
+    border-bottom: none;
+  }
+
+  @media (max-width: 640px) {
+    .params :global(.param-row) {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .params :global(.js-value) {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

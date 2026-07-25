@@ -1,0 +1,332 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import CopyButton from '../../components/CopyButton.astro';
+
+const PRESETS = [
+  { label: 'Every minute', expr: '* * * * *' },
+  { label: 'Every 5 minutes', expr: '*/5 * * * *' },
+  { label: 'Every 15 minutes', expr: '*/15 * * * *' },
+  { label: 'Hourly', expr: '0 * * * *' },
+  { label: 'Every 6 hours', expr: '0 */6 * * *' },
+  { label: 'Daily at 03:00', expr: '0 3 * * *' },
+  { label: 'Weekdays at 09:00', expr: '0 9 * * 1-5' },
+  { label: 'Weekly (Sun 00:00)', expr: '0 0 * * 0' },
+  { label: 'Monthly (1st 00:00)', expr: '0 0 1 * *' },
+  { label: 'Quarterly', expr: '0 0 1 1,4,7,10 *' },
+  { label: 'Yearly', expr: '0 0 1 1 *' },
+  { label: 'Business hours', expr: '0 9-17 * * 1-5' },
+];
+
+const FIELDS = [
+  { id: 'minute', label: 'Minute', range: '0–59', index: 0 },
+  { id: 'hour', label: 'Hour', range: '0–23', index: 1 },
+  { id: 'dom', label: 'Day of month', range: '1–31', index: 2 },
+  { id: 'month', label: 'Month', range: '1–12 or JAN–DEC', index: 3 },
+  { id: 'dow', label: 'Day of week', range: '0–6 or SUN–SAT', index: 4 },
+];
+---
+
+<ToolLayout slug="cron-builder">
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Expression</span>
+      <div class="row">
+        <span class="badge badge-neutral" id="status">Ready</span>
+        <CopyButton target="expression" />
+      </div>
+    </div>
+    <div class="card-pad stack">
+      <input
+        id="expression"
+        class="input mono expr"
+        type="text"
+        spellcheck="false"
+        autocomplete="off"
+        value="0 9 * * 1-5"
+        aria-label="Cron expression"
+      />
+
+      <div class="fields">
+        {
+          FIELDS.map((field) => (
+            <div class="field-box">
+              <label class="label" for={`f-${field.id}`}>
+                {field.label}
+              </label>
+              <input
+                id={`f-${field.id}`}
+                class="input mono js-field"
+                data-index={field.index}
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <span class="hint">{field.range}</span>
+            </div>
+          ))
+        }
+      </div>
+
+      <p id="description" class="flash flash-success"></p>
+      <p id="error" class="flash flash-danger" hidden></p>
+    </div>
+  </section>
+
+  <section class="card card-pad">
+    <span class="label">Presets</span>
+    <div class="presets">
+      {
+        PRESETS.map((p) => (
+          <button type="button" class="btn btn-sm js-preset" data-expr={p.expr}>
+            {p.label}
+            <code>{p.expr}</code>
+          </button>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Next runs</span>
+      <div class="row">
+        <div class="segmented" id="tz">
+          <button type="button" data-value="local" aria-selected="true">Local</button>
+          <button type="button" data-value="utc">UTC</button>
+        </div>
+        <span class="badge badge-neutral" id="tz-name"></span>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data" id="runs">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Date &amp; time</th>
+            <th>Weekday</th>
+            <th>ISO 8601</th>
+            <th>In</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty" id="no-runs" hidden>No upcoming runs in the next four years.</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">Syntax reference</span></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr><th>Token</th><th>Meaning</th><th>Example</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">*</td><td>Every value</td><td class="mono">* * * * * — every minute</td></tr>
+          <tr><td class="mono">,</td><td>List of values</td><td class="mono">0 8,12,18 * * *</td></tr>
+          <tr><td class="mono">-</td><td>Inclusive range</td><td class="mono">0 9-17 * * *</td></tr>
+          <tr><td class="mono">/</td><td>Step within a range</td><td class="mono">*/10 * * * * — every 10 min</td></tr>
+          <tr><td class="mono">names</td><td>Month and weekday names</td><td class="mono">0 0 * JAN MON</td></tr>
+          <tr><td class="mono">@macros</td><td>Shorthand schedules</td><td class="mono">@daily, @weekly, @hourly</td></tr>
+          <tr><td class="mono">0 / 7</td><td>Both mean Sunday</td><td class="mono">0 0 * * 7</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="hint foot-note">
+      Field order is <code>minute hour day-of-month month day-of-week</code>. When both day fields
+      are restricted, cron fires when <em>either</em> matches.
+    </p>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, $$, esc, live, segmented } from '../../lib/dom';
+  import { CronError, MACROS, describe, nextRuns, parseCron } from '../../lib/cron';
+
+  const exprEl = $<HTMLInputElement>('#expression');
+  const errorEl = $('#error');
+  const descEl = $('#description');
+  const statusEl = $('#status');
+  const tbody = $('#runs tbody');
+  const noRuns = $('#no-runs');
+  const fieldEls = $$<HTMLInputElement>('.js-field');
+
+  let useUtc = false;
+
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  $('#tz-name').textContent = zone;
+
+  function syncFields(expression: string) {
+    const expanded = MACROS[expression.trim().toLowerCase()] ?? expression.trim();
+    const parts = expanded.split(/\s+/);
+    fieldEls.forEach((el) => {
+      el.value = parts[Number(el.dataset.index)] ?? '';
+    });
+  }
+
+  function relative(target: Date, now: Date): string {
+    const diff = Math.round((target.getTime() - now.getTime()) / 1000);
+    const units: [number, string][] = [
+      [60, 'second'],
+      [60, 'minute'],
+      [24, 'hour'],
+      [7, 'day'],
+      [4.35, 'week'],
+      [12, 'month'],
+    ];
+    let value = diff;
+    let unit = 'second';
+    for (const [size, name] of units) {
+      unit = name;
+      if (Math.abs(value) < size) break;
+      value = Math.round(value / size);
+    }
+    return `${value} ${unit}${Math.abs(value) === 1 ? '' : 's'}`;
+  }
+
+  /** `fromFields` keeps the per-field inputs from being rewritten mid-edit. */
+  function run(fromFields = false) {
+    const expression = exprEl.value;
+
+    try {
+      const cron = parseCron(expression);
+      exprEl.classList.remove('is-invalid');
+      errorEl.hidden = true;
+      statusEl.textContent = 'Valid';
+      statusEl.className = 'badge badge-success';
+      descEl.textContent = describe(cron);
+      descEl.hidden = false;
+
+      if (!fromFields) syncFields(expression);
+
+      const now = new Date();
+      const runs = nextRuns(cron, now, 10, useUtc);
+      noRuns.hidden = runs.length > 0;
+
+      const dateFmt = new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+        timeZone: useUtc ? 'UTC' : undefined,
+      });
+      const dayFmt = new Intl.DateTimeFormat(undefined, {
+        weekday: 'long',
+        timeZone: useUtc ? 'UTC' : undefined,
+      });
+
+      tbody.innerHTML = runs
+        .map(
+          (date, i) => `<tr>
+            <td class="dim">${i + 1}</td>
+            <td class="mono"><strong>${esc(dateFmt.format(date))}</strong></td>
+            <td>${esc(dayFmt.format(date))}</td>
+            <td class="mono dim">${date.toISOString()}</td>
+            <td class="dim">${esc(relative(date, now))}</td>
+          </tr>`,
+        )
+        .join('');
+    } catch (err) {
+      const message = err instanceof CronError ? err.message : (err as Error).message;
+      exprEl.classList.add('is-invalid');
+      statusEl.textContent = 'Invalid';
+      statusEl.className = 'badge badge-danger';
+      errorEl.hidden = false;
+      errorEl.textContent = message;
+      descEl.hidden = true;
+      tbody.innerHTML = '';
+      noRuns.hidden = true;
+    }
+  }
+
+  fieldEls.forEach((el) =>
+    el.addEventListener('input', () => {
+      exprEl.value = fieldEls
+        .slice()
+        .sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index))
+        .map((f) => f.value.trim() || '*')
+        .join(' ');
+      run(true);
+    }),
+  );
+
+  $$('.js-preset').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      exprEl.value = btn.dataset.expr ?? '';
+      run();
+    }),
+  );
+
+  segmented($('#tz'), (value) => {
+    useUtc = value === 'utc';
+    $('#tz-name').textContent = useUtc ? 'UTC' : zone;
+    run();
+  });
+
+  live([exprEl], () => run());
+  // Keep the “in …” column honest as time passes.
+  window.setInterval(() => run(), 30_000);
+</script>
+
+<style>
+  .expr {
+    font-size: 18px;
+    letter-spacing: 0.06em;
+    padding: 10px 14px;
+    text-align: center;
+  }
+
+  .fields {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .field-box {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .field-box .input {
+    text-align: center;
+  }
+
+  .presets {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .presets :global(.js-preset) {
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .presets :global(code) {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+  }
+
+  .foot-note {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-muted);
+  }
+
+  .foot-note code {
+    font-family: var(--font-mono);
+    padding: 1px 5px;
+    background: var(--neutral-muted);
+    border-radius: 4px;
+  }
+
+  @media (max-width: 720px) {
+    .fields {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .expr {
+      font-size: 15px;
+    }
+  }
+</style>

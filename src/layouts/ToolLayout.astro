@@ -1,0 +1,25 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import { getTool } from '../lib/tools';
+
+interface Props {
+  slug: string;
+}
+
+const { slug } = Astro.props;
+const tool = getTool(slug);
+---
+
+<BaseLayout title={tool.name} description={tool.description} active={tool.slug}>
+  <div class="tool">
+    <slot />
+  </div>
+</BaseLayout>
+
+<style>
+  .tool {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+</style>

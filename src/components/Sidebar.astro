@@ -1,0 +1,361 @@
+---
+import { TOOLS_BY_CATEGORY } from '../lib/tools';
+import { url } from '../lib/paths';
+import Icon from './Icon.astro';
+
+interface Props {
+  active?: string;
+}
+
+const { active } = Astro.props;
+
+---
+
+<aside class="sidebar" id="sidebar" aria-label="Tools">
+  <div class="sidebar-top">
+    <a class="brand" href={url('/')}>
+      <span class="brand-mark" aria-hidden="true">
+        <Icon name="code-s-slash-line" size={18} />
+      </span>
+      <span class="brand-text">
+        <strong>DevToys</strong>
+        <small>developer utilities</small>
+      </span>
+    </a>
+    <button
+      type="button"
+      class="btn btn-icon collapse-btn"
+      id="collapse-btn"
+      title="Collapse sidebar"
+      aria-label="Collapse sidebar"
+      aria-expanded="true"
+    >
+      <Icon name="menu-fold-line" size={18} />
+    </button>
+  </div>
+
+  <div class="sidebar-search">
+    <span class="search-icon"><Icon name="search-line" /></span>
+    <input
+      type="search"
+      id="tool-search"
+      class="input search-input"
+      placeholder="Filter tools…"
+      autocomplete="off"
+      aria-label="Filter tools"
+    />
+    <kbd class="kbd">/</kbd>
+  </div>
+
+  <nav class="sidebar-nav" id="sidebar-nav">
+    {
+      TOOLS_BY_CATEGORY.map((group) => (
+        <div class="nav-group" data-group={group.category}>
+          <p class="nav-group-title">{group.category}</p>
+          <ul>
+            {group.tools.map((tool) => (
+              <li>
+                <a
+                  href={url(`/tools/${tool.slug}`)}
+                  class:list={['nav-link', { 'is-active': active === tool.slug }]}
+                  data-name={`${tool.name} ${tool.keywords.join(' ')} ${tool.category}`.toLowerCase()}
+                  aria-current={active === tool.slug ? 'page' : undefined}
+                  title={tool.name}
+                >
+                  <Icon name={tool.icon} size={18} />
+                  <span class="nav-label">{tool.name}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))
+    }
+    <p class="nav-empty" id="nav-empty" hidden>No tools match.</p>
+  </nav>
+
+  <div class="sidebar-foot">
+    <a class="nav-link" href={url('/')} title="All tools">
+      <Icon name="home-4-line" size={18} />
+      <span class="nav-label">All tools</span>
+    </a>
+  </div>
+</aside>
+
+<style>
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    width: var(--sidebar-w);
+    height: 100dvh;
+    background: var(--canvas-subtle);
+    border-right: 1px solid var(--border);
+    transition: width 0.18s ease, transform 0.22s ease;
+  }
+
+  /* ---- Brand ---- */
+  .sidebar-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--header-h);
+    padding: 0 10px 0 12px;
+    flex-shrink: 0;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    flex: 1;
+    color: var(--fg);
+    border-radius: var(--radius-sm);
+  }
+
+  .brand:hover {
+    text-decoration: none;
+  }
+
+  .brand-mark {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    color: var(--fg-on-emphasis);
+    background: linear-gradient(135deg, var(--accent-emphasis), var(--done-fg));
+    border-radius: 8px;
+  }
+
+  .brand-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.2;
+  }
+
+  .brand-text strong {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .brand-text small {
+    font-size: 11px;
+    color: var(--fg-muted);
+    white-space: nowrap;
+  }
+
+  /* ---- Search ---- */
+  .sidebar-search {
+    position: relative;
+    padding: 0 12px 10px;
+    flex-shrink: 0;
+  }
+
+  .search-input {
+    padding-left: 30px;
+    padding-right: 28px;
+    height: 30px;
+    background: var(--canvas);
+    border-radius: var(--radius-sm);
+  }
+
+  .search-input::-webkit-search-cancel-button {
+    display: none;
+  }
+
+  .search-icon {
+    position: absolute;
+    left: 20px;
+    top: 7px;
+    color: var(--fg-subtle);
+    pointer-events: none;
+  }
+
+  .kbd {
+    position: absolute;
+    right: 19px;
+    top: 6px;
+    padding: 0 5px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 17px;
+    color: var(--fg-subtle);
+    background: var(--canvas-subtle);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    pointer-events: none;
+  }
+
+  /* ---- Nav ---- */
+  .sidebar-nav {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 8px 12px;
+  }
+
+  .nav-group + .nav-group {
+    margin-top: 12px;
+  }
+
+  .nav-group-title {
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-subtle);
+  }
+
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    color: var(--fg);
+    border-radius: var(--radius-sm);
+    font-size: 13.5px;
+    line-height: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+
+  .nav-link :global(svg) {
+    color: var(--fg-muted);
+    transition: color 0.12s ease;
+  }
+
+  .nav-link:hover {
+    background: var(--neutral-muted);
+    text-decoration: none;
+  }
+
+  .nav-link:hover :global(svg) {
+    color: var(--fg);
+  }
+
+  .nav-link.is-active {
+    font-weight: 600;
+    color: var(--fg);
+    background: var(--accent-subtle);
+    box-shadow: inset 2px 0 0 var(--accent-emphasis);
+  }
+
+  .nav-link.is-active :global(svg) {
+    color: var(--accent-fg);
+  }
+
+  .nav-empty {
+    padding: 16px 8px;
+    font-size: 13px;
+    color: var(--fg-muted);
+    text-align: center;
+  }
+
+  /* ---- Footer ---- */
+  .sidebar-foot {
+    flex-shrink: 0;
+    padding: 8px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ---- Collapsed (desktop rail) ---- */
+  :global(body.is-collapsed) .sidebar {
+    width: var(--sidebar-w-collapsed);
+  }
+
+  :global(body.is-collapsed) .brand-text,
+  :global(body.is-collapsed) .nav-label,
+  :global(body.is-collapsed) .nav-group-title,
+  :global(body.is-collapsed) .sidebar-search,
+  :global(body.is-collapsed) .nav-empty {
+    display: none;
+  }
+
+  :global(body.is-collapsed) .sidebar-top {
+    padding: 0;
+    justify-content: center;
+  }
+
+  :global(body.is-collapsed) .brand {
+    flex: 0;
+    justify-content: center;
+  }
+
+  :global(body.is-collapsed) .collapse-btn {
+    display: none;
+  }
+
+  :global(body.is-collapsed) .sidebar-nav {
+    padding-top: 6px;
+  }
+
+  :global(body.is-collapsed) .nav-link {
+    justify-content: center;
+    padding: 8px 0;
+  }
+
+  :global(body.is-collapsed) .nav-group + .nav-group {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ---- Mobile drawer ---- */
+  @media (max-width: 900px) {
+    .sidebar {
+      width: min(84vw, var(--sidebar-w));
+      transform: translateX(-100%);
+      box-shadow: none;
+    }
+
+    :global(body.nav-open) .sidebar {
+      transform: translateX(0);
+      box-shadow: var(--shadow-lg);
+    }
+
+    /* The rail mode is desktop-only. */
+    :global(body.is-collapsed) .sidebar {
+      width: min(84vw, var(--sidebar-w));
+    }
+
+    :global(body.is-collapsed) .brand-text,
+    :global(body.is-collapsed) .nav-label,
+    :global(body.is-collapsed) .nav-group-title,
+    :global(body.is-collapsed) .sidebar-search {
+      display: revert;
+    }
+
+    :global(body.is-collapsed) .sidebar-top {
+      padding: 0 10px 0 12px;
+      justify-content: flex-start;
+    }
+
+    :global(body.is-collapsed) .brand {
+      flex: 1;
+      justify-content: flex-start;
+    }
+
+    :global(body.is-collapsed) .nav-link {
+      justify-content: flex-start;
+      padding: 6px 8px;
+    }
+
+    :global(body.is-collapsed) .nav-group + .nav-group {
+      border-top: none;
+      padding-top: 0;
+      margin-top: 12px;
+    }
+
+    .collapse-btn {
+      display: none;
+    }
+  }
+</style>

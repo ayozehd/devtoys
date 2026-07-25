@@ -1,0 +1,325 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import CopyButton from '../../components/CopyButton.astro';
+
+const SAMPLE = `{
+  "service": "devtoys",
+  "version": "2.14.3",
+  "enabled": true,
+  "replicas": 3,
+  "tags": ["frontend", "static", "offline"],
+  "limits": { "cpu": "500m", "memory": "256Mi" },
+  "owners": [
+    { "name": "Ada", "role": "maintainer" },
+    { "name": "Grace", "role": "reviewer" }
+  ],
+  "deprecatedAt": null
+}`;
+---
+
+<ToolLayout slug="json-formatter">
+  <section class="card card-pad">
+    <div class="toolbar">
+      <div class="field">
+        <span class="label">Indent</span>
+        <div class="segmented" id="indent">
+          <button type="button" data-value="2" aria-selected="true">2 spaces</button>
+          <button type="button" data-value="4">4 spaces</button>
+          <button type="button" data-value="tab">Tab</button>
+          <button type="button" data-value="0">Minify</button>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="sort-keys" /><span>Sort keys</span></label>
+      <div class="spacer"></div>
+      <button type="button" class="btn btn-sm" id="sample">Load sample</button>
+      <button type="button" class="btn btn-sm" id="clear">Clear</button>
+      <button type="button" class="btn btn-sm" id="download">Download</button>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Input</span>
+        <span class="badge badge-neutral" id="status">Empty</span>
+      </div>
+      <div class="card-pad">
+        <textarea id="input" class="textarea" rows="18" spellcheck="false" placeholder="Paste JSON here…">{SAMPLE}</textarea>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div class="segmented" id="view">
+          <button type="button" data-value="formatted" aria-selected="true">Formatted</button>
+          <button type="button" data-value="tree">Tree</button>
+          <button type="button" data-value="paths">Paths</button>
+        </div>
+        <CopyButton target="output" />
+      </div>
+      <pre id="output" class="output pane"></pre>
+      <div id="tree" class="output pane" hidden></div>
+      <div id="paths" class="output pane" hidden></div>
+    </section>
+  </div>
+
+  <p id="error" class="flash flash-danger" hidden></p>
+
+  <section class="card">
+    <div class="card-head"><span class="card-title">Document stats</span></div>
+    <div class="stats grid-auto card-pad" id="stats"></div>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, download as save, esc, live, segmented } from '../../lib/dom';
+  import {
+    analyse,
+    collectPaths,
+    format,
+    locate,
+    preview,
+    sortDeep,
+    typeOf,
+    type Json,
+  } from '../../lib/json';
+
+  const inputEl = $<HTMLTextAreaElement>('#input');
+  const sortEl = $<HTMLInputElement>('#sort-keys');
+  const outputEl = $('#output');
+  const treeEl = $('#tree');
+  const pathsEl = $('#paths');
+  const errorEl = $('#error');
+  const statusEl = $('#status');
+  const statsEl = $('#stats');
+
+  const SAMPLE = inputEl.value;
+  let indent: number | 'tab' = 2;
+
+  function renderTree(value: Json, key: string | null = null, depth = 0): string {
+    const kind = typeOf(value);
+    const label = key === null ? '' : `<span class="k">${esc(key)}</span><span class="c">:</span> `;
+
+    if (kind === 'array' || kind === 'object') {
+      const entries: [string, Json][] = Array.isArray(value)
+        ? (value as Json[]).map((v, i) => [String(i), v])
+        : Object.entries(value as Record<string, Json>);
+      const open = depth < 2 ? ' open' : '';
+      return `<details class="node"${open}>
+        <summary>${label}<span class="t t-${kind}">${esc(preview(value))}</span></summary>
+        <div class="children">
+          ${entries.map(([k, v]) => renderTree(v, k, depth + 1)).join('') || '<div class="leaf dim">empty</div>'}
+        </div>
+      </details>`;
+    }
+
+    return `<div class="leaf">${label}<span class="t t-${kind}">${esc(preview(value))}</span></div>`;
+  }
+
+  function setView(next: string) {
+    outputEl.hidden = next !== 'formatted';
+    treeEl.hidden = next !== 'tree';
+    pathsEl.hidden = next !== 'paths';
+  }
+
+  function run() {
+    const text = inputEl.value.trim();
+
+    if (!text) {
+      statusEl.textContent = 'Empty';
+      statusEl.className = 'badge badge-neutral';
+      errorEl.hidden = true;
+      inputEl.classList.remove('is-invalid');
+      outputEl.textContent = '';
+      treeEl.innerHTML = '';
+      pathsEl.textContent = '';
+      statsEl.innerHTML = '';
+      return;
+    }
+
+    let parsed: Json;
+    try {
+      parsed = JSON.parse(text) as Json;
+    } catch (err) {
+      statusEl.textContent = 'Invalid';
+      statusEl.className = 'badge badge-danger';
+      inputEl.classList.add('is-invalid');
+      errorEl.hidden = false;
+      errorEl.textContent = locate(text, (err as Error).message);
+      return;
+    }
+
+    inputEl.classList.remove('is-invalid');
+    errorEl.hidden = true;
+    statusEl.textContent = 'Valid JSON';
+    statusEl.className = 'badge badge-success';
+
+    const data = sortEl.checked ? sortDeep(parsed) : parsed;
+    const formatted = format(data, indent);
+    outputEl.textContent = formatted;
+    treeEl.innerHTML = renderTree(data);
+    pathsEl.textContent = collectPaths(data).join('\n');
+
+    const s = analyse(data);
+    const minified = JSON.stringify(data).length;
+    const cells: [string, string][] = [
+      ['Type', typeOf(data)],
+      ['Nodes', s.nodes.toLocaleString()],
+      ['Keys', s.keys.toLocaleString()],
+      ['Objects / arrays', `${s.objects} / ${s.arrays}`],
+      ['Max depth', String(s.maxDepth)],
+      ['Minified size', `${minified.toLocaleString()} bytes`],
+      ['Formatted size', `${formatted.length.toLocaleString()} bytes`],
+      [
+        'Whitespace saved',
+        `${(((formatted.length - minified) / Math.max(formatted.length, 1)) * 100).toFixed(1)}%`,
+      ],
+    ];
+    statsEl.innerHTML = cells
+      .map(([k, v]) => `<div class="stat"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`)
+      .join('');
+  }
+
+  segmented($('#indent'), (value) => {
+    indent = value === 'tab' ? 'tab' : Number(value);
+    run();
+  });
+
+  segmented($('#view'), setView);
+
+  $('#sample').addEventListener('click', () => {
+    inputEl.value = SAMPLE;
+    run();
+  });
+
+  $('#clear').addEventListener('click', () => {
+    inputEl.value = '';
+    run();
+    inputEl.focus();
+  });
+
+  $('#download').addEventListener('click', () => {
+    if (outputEl.textContent) save('data.json', outputEl.textContent, 'application/json');
+  });
+
+  live([inputEl, sortEl], run);
+</script>
+
+<style>
+  .toolbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .toolbar .check {
+    padding-bottom: 6px;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .pane {
+    min-height: 340px;
+    max-height: 60vh;
+  }
+
+  .stats :global(.stat) {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    background: var(--canvas-subtle);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+  }
+
+  .stats :global(.stat span) {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+  }
+
+  .stats :global(.stat strong) {
+    font-family: var(--font-mono);
+    font-size: 14px;
+  }
+
+  /* Tree */
+  #tree {
+    white-space: normal;
+  }
+
+  #tree :global(.node) {
+    padding-left: 0;
+  }
+
+  #tree :global(summary) {
+    cursor: pointer;
+    padding: 1px 0;
+    border-radius: 4px;
+    list-style: none;
+  }
+
+  #tree :global(summary::-webkit-details-marker) {
+    display: none;
+  }
+
+  #tree :global(summary::before) {
+    content: '▸';
+    display: inline-block;
+    width: 14px;
+    color: var(--fg-subtle);
+    transition: transform 0.12s ease;
+  }
+
+  #tree :global(details[open] > summary::before) {
+    transform: rotate(90deg);
+  }
+
+  #tree :global(summary:hover) {
+    background: var(--neutral-muted);
+  }
+
+  #tree :global(.children) {
+    margin-left: 7px;
+    padding-left: 10px;
+    border-left: 1px solid var(--border);
+  }
+
+  #tree :global(.leaf) {
+    padding: 1px 0 1px 14px;
+  }
+
+  #tree :global(.k) {
+    color: var(--done-fg);
+  }
+
+  #tree :global(.c) {
+    color: var(--fg-subtle);
+  }
+
+  #tree :global(.t-string) {
+    color: var(--accent-fg);
+  }
+
+  #tree :global(.t-number) {
+    color: var(--attention-fg);
+  }
+
+  #tree :global(.t-boolean) {
+    color: var(--success-fg);
+  }
+
+  #tree :global(.t-null) {
+    color: var(--danger-fg);
+  }
+
+  #tree :global(.t-array),
+  #tree :global(.t-object) {
+    color: var(--fg-muted);
+  }
+</style>

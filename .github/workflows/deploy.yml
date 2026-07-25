@@ -15,7 +15,24 @@ permissions:
   id-token: write
 
 jobs:
+  # Nothing reaches Pages unless the tool logic still behaves.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout your repository using git
+        uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Type-check
+        run: npm run check
+      - name: Unit tests
+        run: npm test
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout your repository using git

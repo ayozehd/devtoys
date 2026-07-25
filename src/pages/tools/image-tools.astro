@@ -1,0 +1,450 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import Icon from '../../components/Icon.astro';
+---
+
+<ToolLayout slug="image-tools">
+  <section class="card">
+    <div class="card-head">
+      <span class="card-title">Source image</span>
+      <div class="row">
+        <span class="badge badge-neutral" id="source-badge">No image</span>
+        <button type="button" class="btn btn-sm" id="reset" disabled>Remove</button>
+      </div>
+    </div>
+
+    <label class="dropzone" id="dropzone" for="file">
+      <Icon name="image-add-line" size={28} />
+      <strong>Drop an image here, paste from the clipboard, or click to browse</strong>
+      <span>PNG, JPEG, WebP, GIF, AVIF, SVG or BMP — processed entirely in this tab</span>
+      <input type="file" id="file" accept="image/*" hidden />
+    </label>
+  </section>
+
+  <div class="grid-2" id="workspace" hidden>
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Settings</span>
+        <button type="button" class="btn btn-sm" id="revert">Reset settings</button>
+      </div>
+      <div class="card-pad stack">
+        <div class="field">
+          <span class="label">Output format</span>
+          <div class="segmented" id="format">
+            <button type="button" data-value="image/webp" aria-selected="true">WebP</button>
+            <button type="button" data-value="image/jpeg">JPEG</button>
+            <button type="button" data-value="image/png">PNG</button>
+          </div>
+        </div>
+
+        <label class="field" id="quality-field">
+          <span class="label">Quality <b id="quality-out">80</b>%</span>
+          <input type="range" id="quality" class="range" min="10" max="100" step="1" value="80" />
+          <span class="hint">PNG is lossless, so quality has no effect on it.</span>
+        </label>
+
+        <div class="field">
+          <span class="label">Resize</span>
+          <div class="segmented" id="resize-mode">
+            <button type="button" data-value="none" aria-selected="true">Original</button>
+            <button type="button" data-value="scale">Scale</button>
+            <button type="button" data-value="fit">Fit box</button>
+            <button type="button" data-value="exact">Exact</button>
+          </div>
+        </div>
+
+        <label class="field" id="scale-field" hidden>
+          <span class="label">Scale <b id="scale-out">50</b>%</span>
+          <input type="range" id="scale" class="range" min="5" max="200" step="5" value="50" />
+        </label>
+
+        <div class="dims" id="dims-field" hidden>
+          <label class="field">
+            <span class="label">Width</span>
+            <input type="number" id="width" class="input" min="1" />
+          </label>
+          <label class="field">
+            <span class="label">Height</span>
+            <input type="number" id="height" class="input" min="1" />
+          </label>
+          <label class="check lock">
+            <input type="checkbox" id="lock" checked />
+            <span>Keep aspect ratio</span>
+          </label>
+        </div>
+
+        <div class="field">
+          <span class="label">Background (for transparent areas)</span>
+          <div class="row">
+            <input type="color" id="bg" class="native" value="#ffffff" />
+            <label class="check"><input type="checkbox" id="keep-alpha" checked /><span>Keep transparency where the format allows</span></label>
+          </div>
+        </div>
+
+        <div class="row">
+          <button type="button" class="btn btn-accent" id="download">Download result</button>
+          <button type="button" class="btn" id="copy-image">Copy image</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Result</span>
+        <span class="badge badge-neutral" id="saving">—</span>
+      </div>
+      <div class="preview-wrap">
+        <img id="preview" alt="Processed result preview" />
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr><th>Metric</th><th>Original</th><th>Result</th></tr>
+          </thead>
+          <tbody id="compare"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <p id="error" class="flash flash-danger" hidden></p>
+</ToolLayout>
+
+<script>
+  import { $, esc, formatBytes, live, segmented } from '../../lib/dom';
+  import { EXTENSIONS, deltaLabel, sizeDelta, targetSize } from '../../lib/image';
+
+  const fileEl = $<HTMLInputElement>('#file');
+  const dropzone = $('#dropzone');
+  const previewEl = $<HTMLImageElement>('#preview');
+  const qualityEl = $<HTMLInputElement>('#quality');
+  const scaleEl = $<HTMLInputElement>('#scale');
+  const widthEl = $<HTMLInputElement>('#width');
+  const heightEl = $<HTMLInputElement>('#height');
+  const lockEl = $<HTMLInputElement>('#lock');
+  const bgEl = $<HTMLInputElement>('#bg');
+  const keepAlphaEl = $<HTMLInputElement>('#keep-alpha');
+  const errorEl = $('#error');
+
+  let format = 'image/webp';
+  let resizeMode = 'none';
+  let source: HTMLImageElement | null = null;
+  let sourceFile: File | null = null;
+  let resultBlob: Blob | null = null;
+  let resultUrl = '';
+
+  function fail(message: string) {
+    errorEl.hidden = false;
+    errorEl.textContent = message;
+  }
+
+  async function load(file: File) {
+    if (!file.type.startsWith('image/')) {
+      fail(`“${file.name}” is not an image.`);
+      return;
+    }
+
+    errorEl.hidden = true;
+    sourceFile = file;
+
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('The browser could not decode this image.'));
+        img.src = url;
+      });
+    } catch (err) {
+      URL.revokeObjectURL(url);
+      fail((err as Error).message);
+      return;
+    }
+
+    source = img;
+    widthEl.value = String(img.naturalWidth);
+    heightEl.value = String(img.naturalHeight);
+
+    $('#source-badge').textContent = `${img.naturalWidth} × ${img.naturalHeight} · ${formatBytes(file.size)}`;
+    $('#source-badge').className = 'badge badge-success';
+    $('#workspace').hidden = false;
+    $<HTMLButtonElement>('#reset').disabled = false;
+
+    void render();
+  }
+
+  function currentSize() {
+    if (!source) return { width: 0, height: 0 };
+    return targetSize(
+      { width: source.naturalWidth, height: source.naturalHeight },
+      resizeMode as 'none' | 'scale' | 'fit' | 'exact',
+      {
+        scale: Number(scaleEl.value),
+        width: Number(widthEl.value),
+        height: Number(heightEl.value),
+      },
+    );
+  }
+
+  async function render() {
+    if (!source || !sourceFile) return;
+
+    const { width, height } = currentSize();
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      fail('This browser does not provide a 2D canvas context.');
+      return;
+    }
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // JPEG has no alpha channel, so transparent pixels need a solid backdrop.
+    const needsBackground = format === 'image/jpeg' || !keepAlphaEl.checked;
+    if (needsBackground) {
+      ctx.fillStyle = bgEl.value;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    ctx.drawImage(source, 0, 0, width, height);
+
+    const quality = Number(qualityEl.value) / 100;
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, format, format === 'image/png' ? undefined : quality),
+    );
+
+    if (!blob) {
+      fail('Encoding failed — try a different output format.');
+      return;
+    }
+
+    errorEl.hidden = true;
+    resultBlob = blob;
+    if (resultUrl) URL.revokeObjectURL(resultUrl);
+    resultUrl = URL.createObjectURL(blob);
+    previewEl.src = resultUrl;
+
+    const before = sourceFile.size;
+    const after = blob.size;
+    const delta = sizeDelta(before, after);
+
+    const savingEl = $('#saving');
+    savingEl.textContent = deltaLabel(delta);
+    savingEl.className = `badge ${delta <= 0 ? 'badge-success' : 'badge-attention'}`;
+
+    const rows: [string, string, string][] = [
+      ['Dimensions', `${source.naturalWidth} × ${source.naturalHeight}`, `${width} × ${height}`],
+      ['File size', formatBytes(before), formatBytes(after)],
+      ['Format', sourceFile.type || 'unknown', format],
+      ['Megapixels', ((source.naturalWidth * source.naturalHeight) / 1e6).toFixed(2), ((width * height) / 1e6).toFixed(2)],
+      ['Bytes / pixel', (before / (source.naturalWidth * source.naturalHeight)).toFixed(2), (after / (width * height)).toFixed(2)],
+    ];
+
+    $('#compare').innerHTML = rows
+      .map(
+        ([k, a, b]) =>
+          `<tr><td class="key">${esc(k)}</td><td class="mono dim">${esc(a)}</td><td class="mono"><strong>${esc(b)}</strong></td></tr>`,
+      )
+      .join('');
+  }
+
+  // ---- Input ---------------------------------------------------------------
+
+  fileEl.addEventListener('change', () => {
+    const file = fileEl.files?.[0];
+    if (file) void load(file);
+  });
+
+  ['dragenter', 'dragover'].forEach((type) =>
+    dropzone.addEventListener(type, (event) => {
+      event.preventDefault();
+      dropzone.classList.add('is-over');
+    }),
+  );
+
+  ['dragleave', 'drop'].forEach((type) =>
+    dropzone.addEventListener(type, (event) => {
+      event.preventDefault();
+      dropzone.classList.remove('is-over');
+    }),
+  );
+
+  dropzone.addEventListener('drop', (event) => {
+    const file = (event as DragEvent).dataTransfer?.files?.[0];
+    if (file) void load(file);
+  });
+
+  document.addEventListener('paste', (event) => {
+    const file = (event as ClipboardEvent).clipboardData?.files?.[0];
+    if (file) void load(file);
+  });
+
+  // ---- Controls ------------------------------------------------------------
+
+  segmented($('#format'), (value) => {
+    format = value;
+    $('#quality-field').hidden = format === 'image/png';
+    void render();
+  });
+
+  segmented($('#resize-mode'), (value) => {
+    resizeMode = value;
+    $('#scale-field').hidden = resizeMode !== 'scale';
+    $('#dims-field').hidden = resizeMode !== 'fit' && resizeMode !== 'exact';
+    void render();
+  });
+
+  widthEl.addEventListener('input', () => {
+    if (!lockEl.checked || !source || resizeMode !== 'exact') return;
+    const ratio = source.naturalHeight / source.naturalWidth;
+    heightEl.value = String(Math.max(1, Math.round(Number(widthEl.value) * ratio)));
+  });
+
+  heightEl.addEventListener('input', () => {
+    if (!lockEl.checked || !source || resizeMode !== 'exact') return;
+    const ratio = source.naturalWidth / source.naturalHeight;
+    widthEl.value = String(Math.max(1, Math.round(Number(heightEl.value) * ratio)));
+  });
+
+  $('#download').addEventListener('click', () => {
+    if (!resultBlob || !sourceFile) return;
+    const base = sourceFile.name.replace(/\.[^.]+$/, '') || 'image';
+    const { width, height } = currentSize();
+    const a = document.createElement('a');
+    a.href = resultUrl;
+    a.download = `${base}-${width}x${height}.${EXTENSIONS[format]}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  $('#copy-image').addEventListener('click', async (event) => {
+    const btn = event.currentTarget as HTMLElement;
+    if (!resultBlob) return;
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ [resultBlob.type]: resultBlob })]);
+      btn.textContent = 'Copied';
+    } catch {
+      // Safari and Firefox only allow PNG (or nothing) on the async clipboard.
+      btn.textContent = 'Not supported here';
+    }
+    window.setTimeout(() => {
+      btn.textContent = 'Copy image';
+    }, 1600);
+  });
+
+  $('#reset').addEventListener('click', () => {
+    source = null;
+    sourceFile = null;
+    fileEl.value = '';
+    $('#workspace').hidden = true;
+    $<HTMLButtonElement>('#reset').disabled = true;
+    $('#source-badge').textContent = 'No image';
+    $('#source-badge').className = 'badge badge-neutral';
+  });
+
+  $('#revert').addEventListener('click', () => {
+    qualityEl.value = '80';
+    scaleEl.value = '50';
+    keepAlphaEl.checked = true;
+    if (source) {
+      widthEl.value = String(source.naturalWidth);
+      heightEl.value = String(source.naturalHeight);
+    }
+    void render();
+  });
+
+  live([qualityEl, scaleEl, widthEl, heightEl, bgEl, keepAlphaEl], () => {
+    $('#quality-out').textContent = qualityEl.value;
+    $('#scale-out').textContent = scaleEl.value;
+    void render();
+  });
+</script>
+
+<style>
+  .dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin: 16px;
+    padding: 34px 20px;
+    text-align: center;
+    color: var(--fg-muted);
+    background: var(--canvas-subtle);
+    border: 2px dashed var(--border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+  }
+
+  .dropzone:hover,
+  .dropzone.is-over {
+    border-color: var(--accent-emphasis);
+    background: var(--accent-subtle);
+  }
+
+  .dropzone strong {
+    font-size: 14px;
+    color: var(--fg);
+  }
+
+  .dropzone span {
+    font-size: 12.5px;
+  }
+
+  .range {
+    width: 100%;
+    accent-color: var(--accent-emphasis);
+  }
+
+  .field b {
+    font-family: var(--font-mono);
+    color: var(--fg);
+  }
+
+  .dims {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .dims .lock {
+    grid-column: 1 / -1;
+  }
+
+  .native {
+    width: 46px;
+    height: 32px;
+    padding: 2px;
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .preview-wrap {
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    min-height: 220px;
+    background-image: linear-gradient(45deg, #8883 25%, transparent 25%),
+      linear-gradient(-45deg, #8883 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #8883 75%),
+      linear-gradient(-45deg, transparent 75%, #8883 75%);
+    background-size: 18px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .preview-wrap img {
+    max-width: 100%;
+    max-height: 46vh;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md);
+  }
+</style>

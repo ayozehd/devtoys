@@ -1,0 +1,300 @@
+---
+import ToolLayout from '../../layouts/ToolLayout.astro';
+import CopyButton from '../../components/CopyButton.astro';
+
+const LEFT = `server {
+  listen 80;
+  server_name example.com;
+  root /var/www/html;
+
+  location /api {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+  }
+}`;
+
+const RIGHT = `server {
+  listen 443 ssl;
+  server_name example.com www.example.com;
+  root /var/www/html;
+
+  location /api {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_read_timeout 60s;
+  }
+}`;
+---
+
+<ToolLayout slug="text-diff">
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Original</span>
+        <span class="badge badge-neutral" id="left-stats">0 lines</span>
+      </div>
+      <div class="card-pad">
+        <textarea id="left" class="textarea" rows="10" spellcheck="false">{LEFT}</textarea>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Changed</span>
+        <span class="badge badge-neutral" id="right-stats">0 lines</span>
+      </div>
+      <div class="card-pad">
+        <textarea id="right" class="textarea" rows="10" spellcheck="false">{RIGHT}</textarea>
+      </div>
+    </section>
+  </div>
+
+  <section class="card card-pad">
+    <div class="toolbar">
+      <div class="segmented" id="view">
+        <button type="button" data-value="split" aria-selected="true">Side by side</button>
+        <button type="button" data-value="unified">Unified</button>
+        <button type="button" data-value="patch">Patch</button>
+      </div>
+      <label class="check"><input type="checkbox" id="ignore-ws" /><span>Ignore whitespace</span></label>
+      <label class="check"><input type="checkbox" id="ignore-case" /><span>Ignore case</span></label>
+      <label class="check"><input type="checkbox" id="only-changes" /><span>Only changes</span></label>
+      <div class="spacer"></div>
+      <button type="button" class="btn btn-sm" id="swap">Swap sides</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="row">
+        <span class="badge badge-success" id="add-count">+0</span>
+        <span class="badge badge-danger" id="del-count">−0</span>
+        <span class="badge badge-neutral" id="same-count">0 unchanged</span>
+      </div>
+      <CopyButton target="patch-out" label="Copy patch" />
+    </div>
+    <div class="diff-wrap">
+      <table class="diff" id="diff-split"></table>
+      <table class="diff" id="diff-unified" hidden></table>
+      <pre id="patch-out" class="output" hidden></pre>
+    </div>
+    <p class="empty" id="identical" hidden>The two texts are identical.</p>
+  </section>
+</ToolLayout>
+
+<script>
+  import { $, esc, live, segmented } from '../../lib/dom';
+  import { counts, diff, pairRows, tokenize, unifiedPatch, type Op, type Row } from '../../lib/diff';
+
+  const leftEl = $<HTMLTextAreaElement>('#left');
+  const rightEl = $<HTMLTextAreaElement>('#right');
+  const wsEl = $<HTMLInputElement>('#ignore-ws');
+  const caseEl = $<HTMLInputElement>('#ignore-case');
+  const onlyEl = $<HTMLInputElement>('#only-changes');
+  const splitEl = $<HTMLTableElement>('#diff-split');
+  const unifiedEl = $<HTMLTableElement>('#diff-unified');
+  const patchEl = $('#patch-out');
+  const identicalEl = $('#identical');
+
+  let view = 'split';
+
+  const normalize = (line: string) => {
+    let out = line;
+    if (wsEl.checked) out = out.replace(/\s+/g, ' ').trim();
+    if (caseEl.checked) out = out.toLowerCase();
+    return out;
+  };
+
+  /** Word-level highlight between a deleted and an inserted line. */
+  function inline(a: string, b: string): [string, string] {
+    const ops = diff(tokenize(a), tokenize(b), normalize);
+    let left = '';
+    let right = '';
+    for (const op of ops) {
+      const text = esc(op.value);
+      if (op.type === 'equal') {
+        left += text;
+        right += text;
+      } else if (op.type === 'del') {
+        left += `<span class="w-del">${text}</span>`;
+      } else {
+        right += `<span class="w-ins">${text}</span>`;
+      }
+    }
+    return [left, right];
+  }
+
+  function cell(content: string | null, no: number | null, cls: string): string {
+    if (content === null) return `<td class="no"></td><td class="line empty-cell"></td>`;
+    return `<td class="no">${no ?? ''}</td><td class="line ${cls}">${content || '&nbsp;'}</td>`;
+  }
+
+  function renderSplit(rows: Row[]) {
+    splitEl.innerHTML = rows
+      .filter((r) => !onlyEl.checked || r.kind !== 'equal')
+      .map((r) => {
+        if (r.kind === 'change' && r.left !== null && r.right !== null) {
+          const [l, rr] = inline(r.left, r.right);
+          return `<tr>${cell(l, r.leftNo, 'del')}${cell(rr, r.rightNo, 'ins')}</tr>`;
+        }
+        const l = r.left === null ? null : esc(r.left);
+        const rr = r.right === null ? null : esc(r.right);
+        const cls = r.kind === 'equal' ? '' : r.kind;
+        return `<tr>${cell(l, r.leftNo, cls === 'ins' ? '' : cls)}${cell(rr, r.rightNo, cls === 'del' ? '' : cls)}</tr>`;
+      })
+      .join('');
+  }
+
+  function renderUnified(ops: Op<string>[]) {
+    unifiedEl.innerHTML = ops
+      .filter((op) => !onlyEl.checked || op.type !== 'equal')
+      .map((op) => {
+        const sign = op.type === 'del' ? '−' : op.type === 'ins' ? '+' : ' ';
+        const cls = op.type === 'equal' ? '' : op.type;
+        return `<tr>
+          <td class="no">${op.a >= 0 ? op.a + 1 : ''}</td>
+          <td class="no">${op.b >= 0 ? op.b + 1 : ''}</td>
+          <td class="sign ${cls}">${sign}</td>
+          <td class="line ${cls}">${esc(op.value) || '&nbsp;'}</td>
+        </tr>`;
+      })
+      .join('');
+  }
+
+  function run() {
+    const a = leftEl.value === '' ? [] : leftEl.value.split('\n');
+    const b = rightEl.value === '' ? [] : rightEl.value.split('\n');
+
+    $('#left-stats').textContent = `${a.length} lines`;
+    $('#right-stats').textContent = `${b.length} lines`;
+
+    const ops = diff(a, b, normalize);
+    const { added, removed, unchanged } = counts(ops);
+
+    $('#add-count').textContent = `+${added}`;
+    $('#del-count').textContent = `−${removed}`;
+    $('#same-count').textContent = `${unchanged} unchanged`;
+    identicalEl.hidden = added > 0 || removed > 0;
+
+    renderSplit(pairRows(ops));
+    renderUnified(ops);
+    patchEl.textContent = unifiedPatch(ops);
+  }
+
+  function setView(next: string) {
+    view = next;
+    splitEl.hidden = view !== 'split';
+    unifiedEl.hidden = view !== 'unified';
+    patchEl.hidden = view !== 'patch';
+  }
+
+  segmented($('#view'), setView);
+
+  $('#swap').addEventListener('click', () => {
+    const tmp = leftEl.value;
+    leftEl.value = rightEl.value;
+    rightEl.value = tmp;
+    run();
+  });
+
+  live([leftEl, rightEl, wsEl, caseEl, onlyEl], run);
+</script>
+
+<style>
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .diff-wrap {
+    overflow-x: auto;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+
+  table.diff {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    table-layout: fixed;
+  }
+
+  table.diff :global(td) {
+    vertical-align: top;
+    padding: 0;
+  }
+
+  table.diff :global(td.no) {
+    width: 44px;
+    padding: 0 8px;
+    text-align: right;
+    color: var(--fg-subtle);
+    background: var(--canvas-subtle);
+    border-right: 1px solid var(--border-muted);
+    user-select: none;
+  }
+
+  table.diff :global(td.line) {
+    padding: 0 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  table.diff :global(td.line.del) {
+    background: var(--danger-subtle);
+  }
+
+  table.diff :global(td.line.ins) {
+    background: var(--success-subtle);
+  }
+
+  table.diff :global(td.empty-cell) {
+    background: var(--canvas-subtle);
+    opacity: 0.6;
+  }
+
+  table.diff :global(td.sign) {
+    width: 20px;
+    text-align: center;
+    color: var(--fg-muted);
+  }
+
+  table.diff :global(td.sign.del) {
+    color: var(--danger-fg);
+    background: var(--danger-subtle);
+  }
+
+  table.diff :global(td.sign.ins) {
+    color: var(--success-fg);
+    background: var(--success-subtle);
+  }
+
+  table.diff :global(.w-del) {
+    background: color-mix(in srgb, var(--danger-fg) 26%, transparent);
+    border-radius: 3px;
+  }
+
+  table.diff :global(.w-ins) {
+    background: color-mix(in srgb, var(--success-fg) 26%, transparent);
+    border-radius: 3px;
+  }
+
+  #diff-split :global(td.line) {
+    width: calc(50% - 44px);
+  }
+
+  @media (max-width: 760px) {
+    table.diff :global(td.no) {
+      width: 32px;
+      padding: 0 4px;
+    }
+  }
+</style>
