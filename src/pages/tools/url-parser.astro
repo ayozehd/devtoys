@@ -69,6 +69,14 @@ const SAMPLE =
 
 <script>
   import { $, esc, live } from '../../lib/dom';
+  import {
+    PART_LABELS,
+    parseUrl,
+    pathSegments,
+    queryParams,
+    rebuildUrl,
+    safeDecode,
+  } from '../../lib/urls';
 
   const urlEl = $<HTMLTextAreaElement>('#url');
   const errorEl = $('#error');
@@ -83,28 +91,10 @@ const SAMPLE =
   let params: [string, string][] = [];
   let current: URL | null = null;
 
-  const PART_LABELS: [keyof URL, string][] = [
-    ['origin', 'Origin'],
-    ['protocol', 'Protocol'],
-    ['username', 'Username'],
-    ['password', 'Password'],
-    ['host', 'Host (with port)'],
-    ['hostname', 'Hostname'],
-    ['port', 'Port'],
-    ['pathname', 'Path'],
-    ['search', 'Query string'],
-    ['hash', 'Fragment'],
-  ];
-
   function renderParts(url: URL) {
     partsEl.innerHTML = PART_LABELS.map(([key, label]) => {
       const raw = String(url[key] ?? '');
-      let decoded = raw;
-      try {
-        decoded = decodeURIComponent(raw);
-      } catch {
-        /* keep raw */
-      }
+      const decoded = safeDecode(raw);
       const differs = decoded !== raw;
       return `<tr>
         <td class="part-key">${esc(label)}</td>
@@ -119,21 +109,15 @@ const SAMPLE =
   }
 
   function renderSegments(url: URL) {
-    const segs = url.pathname.split('/').filter(Boolean);
+    const segs = pathSegments(url);
     $('#no-segments').hidden = segs.length > 0;
     segmentsEl.innerHTML = segs
-      .map((seg, i) => {
-        let decoded = seg;
-        try {
-          decoded = decodeURIComponent(seg);
-        } catch {
-          /* keep raw */
-        }
-        return `<tr>
+      .map(
+        (seg, i) => `<tr>
           <td class="mono dim">${i + 1}</td>
-          <td class="mono">${esc(decoded)}</td>
-        </tr>`;
-      })
+          <td class="mono">${esc(seg)}</td>
+        </tr>`,
+      )
       .join('');
   }
 
@@ -153,19 +137,7 @@ const SAMPLE =
 
   function rebuild() {
     if (!current) return;
-    const url = current;
-
-    const sp = new URLSearchParams();
-    for (const [k, v] of params) {
-      if (k) sp.append(k, v);
-    }
-    const query = sp.toString();
-
-    const credentials = url.username
-      ? `${url.username}${url.password ? `:${url.password}` : ''}@`
-      : '';
-    const base = `${url.protocol}//${credentials}${url.host}${url.pathname}`;
-    rebuiltEl.textContent = `${base}${query ? `?${query}` : ''}${url.hash}`;
+    rebuiltEl.textContent = rebuildUrl(current, params);
   }
 
   function run() {
@@ -186,19 +158,14 @@ const SAMPLE =
 
     let url: URL;
     try {
-      url = new URL(raw);
-    } catch {
-      // Retry with a scheme so "example.com/x" still parses.
-      try {
-        url = new URL(`https://${raw}`);
-      } catch (err) {
-        statusEl.textContent = 'Invalid';
-        statusEl.className = 'badge badge-danger';
-        urlEl.classList.add('is-invalid');
-        errorEl.hidden = false;
-        errorEl.textContent = `Not a valid URL: ${(err as Error).message}`;
-        return;
-      }
+      url = parseUrl(raw);
+    } catch (err) {
+      statusEl.textContent = 'Invalid';
+      statusEl.className = 'badge badge-danger';
+      urlEl.classList.add('is-invalid');
+      errorEl.hidden = false;
+      errorEl.textContent = `Not a valid URL: ${(err as Error).message}`;
+      return;
     }
 
     current = url;
@@ -207,7 +174,7 @@ const SAMPLE =
     statusEl.textContent = 'Valid';
     statusEl.className = 'badge badge-success';
 
-    params = [...url.searchParams.entries()];
+    params = queryParams(url);
     renderParts(url);
     renderSegments(url);
     renderParams();

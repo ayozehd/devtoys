@@ -85,6 +85,7 @@ const SAMPLE = `<div class="note" onclick="steal()">
 <script>
   import DOMPurify from 'dompurify';
   import { $, esc, live, segmented } from '../../lib/dom';
+  import { NAMED, decodeEntities, encodeEntities } from '../../lib/entities';
 
   const inputEl = $<HTMLTextAreaElement>('#input');
   const outputEl = $<HTMLTextAreaElement>('#output');
@@ -95,80 +96,6 @@ const SAMPLE = `<div class="note" onclick="steal()">
 
   const SAMPLE = inputEl.value;
   let mode = 'encode';
-
-  const NAMED: Record<string, string> = {
-    '&': 'amp',
-    '<': 'lt',
-    '>': 'gt',
-    '"': 'quot',
-    "'": 'apos',
-    '\u00a0': 'nbsp',
-    '©': 'copy',
-    '®': 'reg',
-    '™': 'trade',
-    '€': 'euro',
-    '£': 'pound',
-    '¥': 'yen',
-    '¢': 'cent',
-    '§': 'sect',
-    '¶': 'para',
-    '†': 'dagger',
-    '•': 'bull',
-    '…': 'hellip',
-    '—': 'mdash',
-    '–': 'ndash',
-    '‘': 'lsquo',
-    '’': 'rsquo',
-    '“': 'ldquo',
-    '”': 'rdquo',
-    '«': 'laquo',
-    '»': 'raquo',
-    '×': 'times',
-    '÷': 'divide',
-    '±': 'plusmn',
-    '°': 'deg',
-    'µ': 'micro',
-    '¼': 'frac14',
-    '½': 'frac12',
-    '¾': 'frac34',
-    '←': 'larr',
-    '→': 'rarr',
-    '↑': 'uarr',
-    '↓': 'darr',
-    '⇒': 'rArr',
-    '∞': 'infin',
-    '≠': 'ne',
-    '≤': 'le',
-    '≥': 'ge',
-    '≈': 'asymp',
-    '√': 'radic',
-    'α': 'alpha',
-    'β': 'beta',
-    'π': 'pi',
-    'Ω': 'Omega',
-  };
-
-  function encodeEntities(text: string): string {
-    const chars = [...text];
-    return chars
-      .map((ch) => {
-        const code = ch.codePointAt(0)!;
-        const named = namedEl.checked ? NAMED[ch] : undefined;
-        const mustEscape = ch === '&' || ch === '<' || ch === '>' || ch === '"' || ch === "'";
-
-        if (mustEscape) return named ? `&${named};` : `&#${code};`;
-        if (allEl.checked && code > 126) return named ? `&${named};` : `&#${code};`;
-        if (named && code > 126) return `&${named};`;
-        return ch;
-      })
-      .join('');
-  }
-
-  /** Decoding via the parser handles every named entity the browser knows. */
-  function decodeEntities(text: string): string {
-    const doc = new DOMParser().parseFromString(`<!doctype html><body>${text}`, 'text/html');
-    return doc.body.textContent ?? '';
-  }
 
   const removed: string[] = [];
 
@@ -204,7 +131,7 @@ const SAMPLE = `<div class="note" onclick="steal()">
           : 'Removes scripts, inline event handlers and unsafe URLs from untrusted HTML.';
 
     if (mode === 'encode') {
-      outputEl.value = encodeEntities(text);
+      outputEl.value = encodeEntities(text, { all: allEl.checked, named: namedEl.checked });
     } else if (mode === 'decode') {
       outputEl.value = decodeEntities(text);
     } else {

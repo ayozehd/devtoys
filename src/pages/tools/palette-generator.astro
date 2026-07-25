@@ -88,60 +88,23 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
     rgbToHsl,
     type RGB,
   } from '../../lib/color';
+  import {
+    HARMONY_HINTS,
+    exportPalette,
+    harmonyColors,
+    scaleColors,
+    type ExportFormat,
+    type Harmony,
+    type Swatch,
+  } from '../../lib/palette';
 
   const baseEl = $<HTMLInputElement>('#base');
   const baseTextEl = $<HTMLInputElement>('#base-text');
   const angleEl = $<HTMLInputElement>('#gradient-angle');
 
-  const HARMONY_HINTS: Record<string, string> = {
-    complementary: 'Opposite hues — maximum separation, great for accents and alerts.',
-    analogous: 'Neighbouring hues — calm, cohesive, good for backgrounds.',
-    triadic: 'Three evenly spaced hues — vivid but balanced.',
-    tetradic: 'Two complementary pairs — rich, needs one dominant colour.',
-    split: 'Complement split in two — contrast without the tension.',
-    mono: 'One hue, varying saturation and lightness — quiet and safe.',
-  };
-
-  const SHIFTS: Record<string, number[]> = {
-    complementary: [0, 180],
-    analogous: [-30, 0, 30],
-    triadic: [0, 120, 240],
-    tetradic: [0, 90, 180, 270],
-    split: [0, 150, 210],
-    mono: [0],
-  };
-
-  const STEPS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
-
   let base: RGB = { r: 9, g: 105, b: 218, a: 1 };
-  let harmony = 'complementary';
-  let exportFormat = 'css';
-
-  function harmonyColors(): { label: string; color: RGB }[] {
-    const hsl = rgbToHsl(base);
-    if (harmony === 'mono') {
-      return [0.85, 0.6, 0.35, 0, 0.25, 0.5].map((amount, i) => ({
-        label: i === 3 ? 'base' : i < 3 ? `light ${3 - i}` : `dark ${i - 3}`,
-        color: i < 3 ? mix(base, WHITE, amount) : i === 3 ? base : mix(base, BLACK, amount),
-      }));
-    }
-    return SHIFTS[harmony].map((shift) => ({
-      label: shift === 0 ? 'base' : `${shift > 0 ? '+' : ''}${shift}°`,
-      color: hslToRgb({ ...hsl, h: (hsl.h + shift + 360) % 360 }),
-    }));
-  }
-
-  /** Blends toward white/black so the ramp keeps the base hue at step 500. */
-  function scaleColors(): { step: number; color: RGB }[] {
-    return STEPS.map((step) => {
-      if (step === 500) return { step, color: base };
-      const color =
-        step < 500
-          ? mix(base, WHITE, (500 - step) / 500 * 0.95)
-          : mix(base, BLACK, (step - 500) / 450 * 0.82);
-      return { step, color };
-    });
-  }
+  let harmony: Harmony = 'complementary';
+  let exportFormat: ExportFormat = 'css';
 
   function swatchHtml(color: RGB, label: string, sub = ''): string {
     const hex = rgbToHex(color).toUpperCase();
@@ -152,35 +115,7 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
     </button>`;
   }
 
-  function renderExport(colors: { step: number; color: RGB }[], harmonies: { label: string; color: RGB }[]) {
-    const hexes = colors.map(({ step, color }) => [String(step), rgbToHex(color)] as const);
-
-    if (exportFormat === 'css') {
-      $('#export-out').textContent = `:root {\n${hexes
-        .map(([k, v]) => `  --brand-${k}: ${v};`)
-        .join('\n')}\n\n${harmonies
-        .map((h, i) => `  --accent-${i + 1}: ${rgbToHex(h.color)}; /* ${h.label} */`)
-        .join('\n')}\n}`;
-    } else if (exportFormat === 'scss') {
-      $('#export-out').textContent = hexes.map(([k, v]) => `$brand-${k}: ${v};`).join('\n');
-    } else if (exportFormat === 'tailwind') {
-      $('#export-out').textContent = `// tailwind.config.js\ncolors: {\n  brand: {\n${hexes
-        .map(([k, v]) => `    ${k}: '${v}',`)
-        .join('\n')}\n  },\n}`;
-    } else {
-      $('#export-out').textContent = JSON.stringify(
-        {
-          base: rgbToHex(base),
-          harmony: Object.fromEntries(harmonies.map((h, i) => [h.label || `color-${i}`, rgbToHex(h.color)])),
-          scale: Object.fromEntries(hexes),
-        },
-        null,
-        2,
-      );
-    }
-  }
-
-  function renderGradients(harmonies: { label: string; color: RGB }[]) {
+  function renderGradients(harmonies: Swatch[]) {
     const angle = angleEl.checked ? '135deg' : '90deg';
     const baseHex = rgbToHex(base);
     const partner = rgbToHex(harmonies[harmonies.length - 1].color);
@@ -213,8 +148,8 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
   }
 
   function render() {
-    const harmonies = harmonyColors();
-    const scale = scaleColors();
+    const harmonies = harmonyColors(base, harmony);
+    const scale = scaleColors(base);
 
     $('#harmony-hint').textContent = HARMONY_HINTS[harmony];
     $('#harmony-out').innerHTML = harmonies
@@ -223,7 +158,7 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
     $('#scale').innerHTML = scale.map(({ step, color }) => swatchHtml(color, String(step), '')).join('');
 
     renderGradients(harmonies);
-    renderExport(scale, harmonies);
+    $('#export-out').textContent = exportPalette(exportFormat, base, scale, harmonies);
   }
 
   function setBase(value: string, from: 'picker' | 'text') {
@@ -253,12 +188,12 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
   });
 
   segmented($('#harmony'), (value) => {
-    harmony = value;
+    harmony = value as Harmony;
     render();
   });
 
   segmented($('#export-format'), (value) => {
-    exportFormat = value;
+    exportFormat = value as ExportFormat;
     render();
   });
 

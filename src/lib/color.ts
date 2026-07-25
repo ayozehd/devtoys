@@ -269,3 +269,25 @@ export function mix(a: RGB, b: RGB, amount: number): RGB {
 
 export const WHITE: RGB = { r: 255, g: 255, b: 255, a: 1 };
 export const BLACK: RGB = { r: 0, g: 0, b: 0, a: 1 };
+
+/** The label/value rows shown by the Color Picker, in display order. */
+export function formatRows(color: RGB): [string, string][] {
+  const cmyk = rgbToCmyk(color);
+  const hsl = rgbToHsl(color);
+  return [
+    ['HEX', rgbToHex(color).toUpperCase()],
+    ['HEX + alpha', rgbToHex(color, true).toUpperCase()],
+    ['RGB', formatRgb(color)],
+    ['RGBA', `rgba(${color.r}, ${color.g}, ${color.b}, ${Number(color.a.toFixed(3))})`],
+    ['HSL', formatHsl(color)],
+    ['HSLA', `hsla(${hsl.h}, ${hsl.s}%, ${hsl.l}%, ${Number(color.a.toFixed(3))})`],
+    ['OKLCH', formatOklch(color)],
+    ['CMYK', `cmyk(${cmyk.c}%, ${cmyk.m}%, ${cmyk.y}%, ${cmyk.k}%)`],
+    ['CSS variable', `--color: ${rgbToHex(color)};`],
+    [
+      'Swift',
+      `UIColor(red: ${(color.r / 255).toFixed(3)}, green: ${(color.g / 255).toFixed(3)}, blue: ${(color.b / 255).toFixed(3)}, alpha: ${color.a})`,
+    ],
+    ['Android', `Color.parseColor("${rgbToHex(color, true).toUpperCase()}")`],
+  ];
+}

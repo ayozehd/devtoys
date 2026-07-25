@@ -98,6 +98,14 @@ const MODES = [
 
 <script>
   import { $, esc, live, segmented } from '../../lib/dom';
+  import {
+    MODE_LABELS,
+    chunk,
+    decode,
+    encode,
+    inspect,
+    type EncodingMode,
+  } from '../../lib/encoding';
 
   const inputEl = $<HTMLTextAreaElement>('#input');
   const outputEl = $<HTMLTextAreaElement>('#output');
@@ -109,113 +117,18 @@ const MODES = [
   const outStats = $('#out-stats');
   const inspector = $('#inspector');
 
-  const LABELS: Record<string, string> = {
-    base64: 'Base64',
-    base64url: 'Base64 URL-safe',
-    hex: 'Hex',
-    url: 'URL encoded',
-    urlcomponent: 'URL component encoded',
-    binary: 'Binary',
-    rot13: 'ROT13',
-  };
-
-  let mode = 'base64';
+  let mode: EncodingMode = 'base64';
   let direction: 'encode' | 'decode' = 'encode';
 
-  const enc = new TextEncoder();
-  const dec = new TextDecoder('utf-8', { fatal: true });
-
-  const toBase64 = (bytes: Uint8Array) => {
-    let bin = '';
-    for (const b of bytes) bin += String.fromCharCode(b);
-    return btoa(bin);
-  };
-
-  const fromBase64 = (text: string) => {
-    const clean = text.replace(/[\s]/g, '').replace(/-/g, '+').replace(/_/g, '/');
-    const padded = clean + '='.repeat((4 - (clean.length % 4)) % 4);
-    const bin = atob(padded);
-    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
-  };
-
-  function encode(text: string): string {
-    const bytes = enc.encode(text);
-    switch (mode) {
-      case 'base64':
-        return toBase64(bytes);
-      case 'base64url':
-        return toBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      case 'hex':
-        return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(' ');
-      case 'url':
-        return encodeURI(text);
-      case 'urlcomponent':
-        return encodeURIComponent(text);
-      case 'binary':
-        return Array.from(bytes, (b) => b.toString(2).padStart(8, '0')).join(' ');
-      case 'rot13':
-        return text.replace(/[a-z]/gi, (c) => {
-          const base = c <= 'Z' ? 65 : 97;
-          return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
-        });
-      default:
-        return text;
-    }
-  }
-
-  function decode(text: string): string {
-    switch (mode) {
-      case 'base64':
-      case 'base64url':
-        return dec.decode(fromBase64(text));
-      case 'hex': {
-        const clean = text.replace(/(0x|[\s,:-])/gi, '');
-        if (clean.length % 2) throw new Error('Hex input needs an even number of digits.');
-        if (/[^0-9a-f]/i.test(clean)) throw new Error('Hex input contains non-hex characters.');
-        const bytes = new Uint8Array(clean.length / 2);
-        for (let i = 0; i < bytes.length; i++) {
-          bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
-        }
-        return dec.decode(bytes);
-      }
-      case 'url':
-        return decodeURI(text);
-      case 'urlcomponent':
-        return decodeURIComponent(text);
-      case 'binary': {
-        const bits = text.replace(/[^01]/g, '');
-        if (bits.length % 8) throw new Error('Binary input needs a multiple of 8 bits.');
-        const bytes = new Uint8Array(bits.length / 8);
-        for (let i = 0; i < bytes.length; i++) {
-          bytes[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
-        }
-        return dec.decode(bytes);
-      }
-      case 'rot13':
-        return encode(text);
-      default:
-        return text;
-    }
-  }
-
-  function chunked(text: string): string {
-    if (!chunkEl.checked) return text;
-    return text.replace(/(.{76})/g, '$1\n');
-  }
-
   function updateInspector(text: string) {
-    const bytes = enc.encode(text);
-    const lines = text === '' ? 0 : text.split('\n').length;
+    const stats = inspect(text);
     const rows: [string, string][] = [
-      ['Characters', String([...text].length)],
-      ['UTF-8 bytes', String(bytes.length)],
-      ['Lines', String(lines)],
-      ['Words', String(text.trim() ? text.trim().split(/\s+/).length : 0)],
-      ['Base64 size', `${Math.ceil(bytes.length / 3) * 4} chars`],
-      [
-        'First bytes',
-        Array.from(bytes.slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join(' ') || '—',
-      ],
+      ['Characters', String(stats.characters)],
+      ['UTF-8 bytes', String(stats.bytes)],
+      ['Lines', String(stats.lines)],
+      ['Words', String(stats.words)],
+      ['Base64 size', `${stats.base64Size} chars`],
+      ['First bytes', stats.firstBytes || '—'],
     ];
     inspector.innerHTML = rows
       .map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`)
@@ -225,8 +138,8 @@ const MODES = [
   function run() {
     const text = inputEl.value;
     const encoding = direction === 'encode';
-    inLabel.textContent = encoding ? 'Plain text' : LABELS[mode];
-    outLabel.textContent = encoding ? LABELS[mode] : 'Plain text';
+    inLabel.textContent = encoding ? 'Plain text' : MODE_LABELS[mode];
+    outLabel.textContent = encoding ? MODE_LABELS[mode] : 'Plain text';
     $('#wrap-wrap').hidden = !encoding || (mode !== 'base64' && mode !== 'base64url');
 
     inStats.textContent = `${text.length} chars`;
@@ -241,7 +154,12 @@ const MODES = [
     }
 
     try {
-      const result = encoding ? chunked(encode(text)) : decode(text);
+      const wrap = chunkEl.checked && (mode === 'base64' || mode === 'base64url');
+      const result = encoding
+        ? wrap
+          ? chunk(encode(text, mode))
+          : encode(text, mode)
+        : decode(text, mode);
       outputEl.value = result;
       outStats.textContent = `${result.length} chars`;
       errorEl.hidden = true;
@@ -252,12 +170,12 @@ const MODES = [
       outStats.textContent = '0 chars';
       inputEl.classList.add('is-invalid');
       errorEl.hidden = false;
-      errorEl.textContent = `Cannot decode as ${LABELS[mode]}: ${(err as Error).message}`;
+      errorEl.textContent = `Cannot decode as ${MODE_LABELS[mode]}: ${(err as Error).message}`;
     }
   }
 
   segmented($('#mode'), (value) => {
-    mode = value;
+    mode = value as EncodingMode;
     run();
   });
 

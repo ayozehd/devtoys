@@ -112,6 +112,7 @@ import Icon from '../../components/Icon.astro';
 
 <script>
   import { $, esc, formatBytes, live, segmented } from '../../lib/dom';
+  import { EXTENSIONS, deltaLabel, sizeDelta, targetSize } from '../../lib/image';
 
   const fileEl = $<HTMLInputElement>('#file');
   const dropzone = $('#dropzone');
@@ -131,12 +132,6 @@ import Icon from '../../components/Icon.astro';
   let sourceFile: File | null = null;
   let resultBlob: Blob | null = null;
   let resultUrl = '';
-
-  const EXT: Record<string, string> = {
-    'image/webp': 'webp',
-    'image/jpeg': 'jpg',
-    'image/png': 'png',
-  };
 
   function fail(message: string) {
     errorEl.hidden = false;
@@ -179,37 +174,23 @@ import Icon from '../../components/Icon.astro';
     void render();
   }
 
-  function targetSize(): { width: number; height: number } {
+  function currentSize() {
     if (!source) return { width: 0, height: 0 };
-    const w = source.naturalWidth;
-    const h = source.naturalHeight;
-
-    if (resizeMode === 'scale') {
-      const factor = Number(scaleEl.value) / 100;
-      return { width: Math.max(1, Math.round(w * factor)), height: Math.max(1, Math.round(h * factor)) };
-    }
-
-    if (resizeMode === 'fit') {
-      const boxW = Math.max(1, Number(widthEl.value) || w);
-      const boxH = Math.max(1, Number(heightEl.value) || h);
-      const factor = Math.min(boxW / w, boxH / h);
-      return { width: Math.max(1, Math.round(w * factor)), height: Math.max(1, Math.round(h * factor)) };
-    }
-
-    if (resizeMode === 'exact') {
-      return {
-        width: Math.max(1, Number(widthEl.value) || w),
-        height: Math.max(1, Number(heightEl.value) || h),
-      };
-    }
-
-    return { width: w, height: h };
+    return targetSize(
+      { width: source.naturalWidth, height: source.naturalHeight },
+      resizeMode as 'none' | 'scale' | 'fit' | 'exact',
+      {
+        scale: Number(scaleEl.value),
+        width: Number(widthEl.value),
+        height: Number(heightEl.value),
+      },
+    );
   }
 
   async function render() {
     if (!source || !sourceFile) return;
 
-    const { width, height } = targetSize();
+    const { width, height } = currentSize();
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -250,11 +231,10 @@ import Icon from '../../components/Icon.astro';
 
     const before = sourceFile.size;
     const after = blob.size;
-    const delta = ((after - before) / before) * 100;
+    const delta = sizeDelta(before, after);
 
     const savingEl = $('#saving');
-    savingEl.textContent =
-      delta <= 0 ? `${Math.abs(delta).toFixed(1)}% smaller` : `${delta.toFixed(1)}% larger`;
+    savingEl.textContent = deltaLabel(delta);
     savingEl.className = `badge ${delta <= 0 ? 'badge-success' : 'badge-attention'}`;
 
     const rows: [string, string, string][] = [
@@ -334,10 +314,10 @@ import Icon from '../../components/Icon.astro';
   $('#download').addEventListener('click', () => {
     if (!resultBlob || !sourceFile) return;
     const base = sourceFile.name.replace(/\.[^.]+$/, '') || 'image';
-    const { width, height } = targetSize();
+    const { width, height } = currentSize();
     const a = document.createElement('a');
     a.href = resultUrl;
-    a.download = `${base}-${width}x${height}.${EXT[format]}`;
+    a.download = `${base}-${width}x${height}.${EXTENSIONS[format]}`;
     document.body.appendChild(a);
     a.click();
     a.remove();

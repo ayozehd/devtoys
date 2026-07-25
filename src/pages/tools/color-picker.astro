@@ -88,14 +88,12 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
     WHITE,
     contrastRatio,
     flatten,
-    formatHsl,
-    formatOklch,
+    formatRows,
     formatRgb,
     hslToRgb,
     mix,
     parseColor,
     readableOn,
-    rgbToCmyk,
     rgbToHex,
     rgbToHsl,
     type RGB,
@@ -159,23 +157,7 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
   }
 
   function renderFormats() {
-    const cmyk = rgbToCmyk(color);
-    const hsl = rgbToHsl(color);
-    const rows: [string, string][] = [
-      ['HEX', rgbToHex(color).toUpperCase()],
-      ['HEX + alpha', rgbToHex(color, true).toUpperCase()],
-      ['RGB', formatRgb(color)],
-      ['RGBA', `rgba(${color.r}, ${color.g}, ${color.b}, ${Number(color.a.toFixed(3))})`],
-      ['HSL', formatHsl(color)],
-      ['HSLA', `hsla(${hsl.h}, ${hsl.s}%, ${hsl.l}%, ${Number(color.a.toFixed(3))})`],
-      ['OKLCH', formatOklch(color)],
-      ['CMYK', `cmyk(${cmyk.c}%, ${cmyk.m}%, ${cmyk.y}%, ${cmyk.k}%)`],
-      ['CSS variable', `--color: ${rgbToHex(color)};`],
-      ['Swift', `UIColor(red: ${(color.r / 255).toFixed(3)}, green: ${(color.g / 255).toFixed(3)}, blue: ${(color.b / 255).toFixed(3)}, alpha: ${color.a})`],
-      ['Android', `Color.parseColor("${rgbToHex(color, true).toUpperCase()}")`],
-    ];
-
-    $('#formats').innerHTML = rows
+    $('#formats').innerHTML = formatRows(color)
       .map(
         ([label, value]) => `<div class="format-row">
           <span class="format-label">${esc(label)}</span>

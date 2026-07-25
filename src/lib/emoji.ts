@@ -614,7 +614,6 @@ const DATA: Record<string, string> = {
 🆙|UP button|upgrade
 🔍|magnifying glass tilted left|search find
 🔎|magnifying glass tilted right|search zoom
-🔒|locked|secure
 ⚫|black circle|
 ⚪|white circle|
 🔴|red circle|fail error stop
@@ -736,7 +735,6 @@ const DATA: Record<string, string> = {
 ”|right double quotation mark|smart quote
 ‘|left single quotation mark|
 ’|right single quotation mark|apostrophe
-′|prime|
 ␣|open box|space visible
 ⌀|diameter sign|empty
 №|numero sign|number
@@ -753,7 +751,6 @@ const DATA: Record<string, string> = {
 ♣|black club suit|
 ♪|eighth note|music
 ♫|beamed eighth notes|music
-☕|hot beverage|coffee
 ☺|white smiling face|
 ☹|white frowning face|
 `,
@@ -771,3 +768,34 @@ export const GLYPHS: Glyph[] = Object.entries(DATA).flatMap(([group, block]) =>
 );
 
 export const GROUPS = Object.keys(DATA);
+
+/** Every representation the picker can copy. */
+export type GlyphFormat = 'char' | 'codepoint' | 'entity' | 'js' | 'css';
+
+export const codePoints = (char: string): string[] =>
+  [...char].map((c) => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`);
+
+export function formatGlyph(char: string, format: GlyphFormat): string {
+  switch (format) {
+    case 'codepoint':
+      return codePoints(char).join(' ');
+    case 'entity':
+      return [...char].map((c) => `&#${c.codePointAt(0)};`).join('');
+    case 'js':
+      return [...char].map((c) => `\\u{${c.codePointAt(0)!.toString(16)}}`).join('');
+    case 'css':
+      return [...char].map((c) => `\\${c.codePointAt(0)!.toString(16)}`).join('');
+    default:
+      return char;
+  }
+}
+
+/** The haystack the picker filters on — name plus keywords, lowercased. */
+export const searchText = (g: Glyph) => `${g.name} ${g.keywords}`.toLowerCase();
+
+export function searchGlyphs(query = '', group = ''): Glyph[] {
+  const q = query.trim().toLowerCase();
+  return GLYPHS.filter(
+    (g) => (!group || g.group === group) && (!q || searchText(g).includes(q)),
+  );
+}

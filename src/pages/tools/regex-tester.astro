@@ -149,6 +149,7 @@ Session 3f2504e0-4f89-11d3-9a0c-0305e82c3301 expires 2025-01-31.`;
 
 <script>
   import { $, $$, esc, live } from '../../lib/dom';
+  import { collectMatches, compile, replaceAll, type Hit } from '../../lib/regex';
 
   const patternEl = $<HTMLInputElement>('#pattern');
   const subjectEl = $<HTMLTextAreaElement>('#subject');
@@ -164,39 +165,11 @@ Session 3f2504e0-4f89-11d3-9a0c-0305e82c3301 expires 2025-01-31.`;
 
   const SAMPLE = subjectEl.value;
 
-  interface Hit {
-    index: number;
-    text: string;
-    groups: string[];
-    named: Record<string, string | undefined>;
-  }
-
   const flags = () =>
     $$<HTMLInputElement>('.js-flag')
       .filter((el) => el.checked)
       .map((el) => el.value)
       .join('');
-
-  function collect(re: RegExp, subject: string): Hit[] {
-    const hits: Hit[] = [];
-    const global = re.global || re.sticky;
-    re.lastIndex = 0;
-
-    for (let i = 0; i < 5000; i++) {
-      const m = re.exec(subject);
-      if (!m) break;
-      hits.push({
-        index: m.index,
-        text: m[0],
-        groups: m.slice(1).map((g) => g ?? ''),
-        named: m.groups ?? {},
-      });
-      if (!global) break;
-      // Zero-length matches would otherwise loop forever.
-      if (m[0] === '') re.lastIndex++;
-    }
-    return hits;
-  }
 
   function renderHighlight(subject: string, hits: Hit[]) {
     if (!subject) {
@@ -253,22 +226,21 @@ Session 3f2504e0-4f89-11d3-9a0c-0305e82c3301 expires 2025-01-31.`;
       return;
     }
 
-    let re: RegExp;
-    try {
-      re = new RegExp(source, flagStr);
-    } catch (err) {
+    const compiled = compile(source, flagStr);
+    if ('error' in compiled) {
       patternEl.classList.add('is-invalid');
       errorEl.hidden = false;
-      errorEl.textContent = (err as Error).message;
+      errorEl.textContent = compiled.error;
       statusEl.textContent = 'Invalid';
       statusEl.className = 'badge badge-danger';
       return;
     }
+    const re = compiled.re;
 
     patternEl.classList.remove('is-invalid');
     errorEl.hidden = true;
 
-    const hits = collect(re, subject);
+    const hits = collectMatches(re, subject);
     countEl.textContent = `${hits.length} match${hits.length === 1 ? '' : 'es'}`;
     countEl.className = hits.length ? 'badge badge-success' : 'badge badge-neutral';
     statusEl.textContent = 'Valid';
@@ -278,8 +250,7 @@ Session 3f2504e0-4f89-11d3-9a0c-0305e82c3301 expires 2025-01-31.`;
     renderTable(hits);
 
     try {
-      re.lastIndex = 0;
-      replaceOut.textContent = subject.replace(re, replacementEl.value);
+      replaceOut.textContent = replaceAll(re, subject, replacementEl.value);
     } catch (err) {
       replaceOut.textContent = `Replacement error: ${(err as Error).message}`;
     }

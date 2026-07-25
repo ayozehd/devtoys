@@ -82,6 +82,20 @@ import CopyButton from '../../components/CopyButton.astro';
 
 <script>
   import { $, $$, download as save, live, segmented } from '../../lib/dom';
+  import {
+    CHARSETS,
+    MAX_UUID,
+    NIL_UUID,
+    decorate,
+    nanoid,
+    randomColor,
+    randomInt,
+    randomString,
+    sentence,
+    ulid,
+    uuid4,
+    uuid7,
+  } from '../../lib/random';
 
   const countEl = $<HTMLInputElement>('#count');
   const lengthEl = $<HTMLInputElement>('#length');
@@ -106,89 +120,11 @@ import CopyButton from '../../components/CopyButton.astro';
     lorem: 'Placeholder sentences for layout work.',
   };
 
-  const bytes = (n: number) => crypto.getRandomValues(new Uint8Array(n));
-  const hex = (arr: Uint8Array) => Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
-
-  function uuid4(): string {
-    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-    const b = bytes(16);
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    const h = hex(b);
-    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-  }
-
-  /** UUID v7: 48-bit big-endian timestamp, version/variant bits, then entropy. */
-  function uuid7(): string {
-    const b = bytes(16);
-    const now = BigInt(Date.now());
-    for (let i = 0; i < 6; i++) {
-      b[i] = Number((now >> BigInt(8 * (5 - i))) & 0xffn);
-    }
-    b[6] = (b[6] & 0x0f) | 0x70;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    const h = hex(b);
-    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-  }
-
-  const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-
-  function ulid(): string {
-    let time = Date.now();
-    let timePart = '';
-    for (let i = 0; i < 10; i++) {
-      timePart = CROCKFORD[time % 32] + timePart;
-      time = Math.floor(time / 32);
-    }
-    const random = Array.from(bytes(16), (b) => CROCKFORD[b % 32]).join('');
-    return timePart + random;
-  }
-
-  const NANO_ALPHABET = 'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict';
-
-  function nanoid(size: number): string {
-    return Array.from(bytes(size), (b) => NANO_ALPHABET[b % NANO_ALPHABET.length]).join('');
-  }
-
-  const CHARSETS: Record<string, string> = {
-    lower: 'abcdefghijklmnopqrstuvwxyz',
-    upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-    digits: '0123456789',
-    symbols: '!@#$%^&*()-_=+[]{};:,.?',
-  };
-
-  function randomString(size: number): string {
-    const pool = $$<HTMLInputElement>('.js-charset')
+  function pool(): string {
+    return $$<HTMLInputElement>('.js-charset')
       .filter((el) => el.checked)
       .map((el) => CHARSETS[el.value])
       .join('');
-    if (!pool) return '';
-    return Array.from(bytes(size), (b) => pool[b % pool.length]).join('');
-  }
-
-  /** Rejection sampling keeps the distribution uniform across the range. */
-  function randomInt(min: number, max: number): number {
-    const lo = Math.ceil(Math.min(min, max));
-    const hi = Math.floor(Math.max(min, max));
-    const range = hi - lo + 1;
-    if (range <= 0) return lo;
-    const limit = Math.floor(0xffffffff / range) * range;
-    let value = 0;
-    do {
-      value = crypto.getRandomValues(new Uint32Array(1))[0];
-    } while (value >= limit);
-    return lo + (value % range);
-  }
-
-  const WORDS =
-    'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua enim ad minim veniam quis nostrud exercitation ullamco laboris nisi aliquip ex ea commodo consequat duis aute irure in reprehenderit voluptate velit esse cillum eu fugiat nulla pariatur excepteur sint occaecat cupidatat non proident sunt culpa qui officia deserunt mollit anim id est laborum'.split(
-      ' ',
-    );
-
-  function sentence(): string {
-    const length = randomInt(8, 18);
-    const words = Array.from({ length }, () => WORDS[randomInt(0, WORDS.length - 1)]);
-    return `${words[0][0].toUpperCase()}${words[0].slice(1)} ${words.slice(1).join(' ')}.`;
   }
 
   function generateOne(): string {
@@ -202,13 +138,11 @@ import CopyButton from '../../components/CopyButton.astro';
       case 'nanoid':
         return nanoid(Number(lengthEl.value) || 21);
       case 'string':
-        return randomString(Number(lengthEl.value) || 16);
+        return randomString(Number(lengthEl.value) || 16, pool());
       case 'number':
         return String(randomInt(Number(minEl.value), Number(maxEl.value)));
-      case 'color': {
-        const b = bytes(3);
-        return `#${hex(b)}  rgb(${b[0]}, ${b[1]}, ${b[2]})`;
-      }
+      case 'color':
+        return randomColor();
       case 'lorem':
         return sentence();
       default:
@@ -216,27 +150,24 @@ import CopyButton from '../../components/CopyButton.astro';
     }
   }
 
-  function decorate(value: string): string {
-    let out = value;
-    if (upperEl.checked) out = out.toUpperCase();
-    if (bracesEl.checked) out = `{${out}}`;
-    if (quotesEl.checked) out = `"${out}",`;
-    return out;
-  }
+  const decorations = () => ({
+    upper: upperEl.checked,
+    braces: bracesEl.checked,
+    quotes: quotesEl.checked,
+  });
 
   function generate() {
     const count = Math.min(500, Math.max(1, Number(countEl.value) || 1));
 
     if (kind === 'nil') {
-      outputEl.textContent = [
-        decorate('00000000-0000-0000-0000-000000000000'),
-        decorate('ffffffff-ffff-ffff-ffff-ffffffffffff'),
-      ].join('\n');
+      outputEl.textContent = [NIL_UUID, MAX_UUID]
+        .map((value) => decorate(value, decorations()))
+        .join('\n');
       $('#meta').textContent = '2 values';
       return;
     }
 
-    const values = Array.from({ length: count }, () => decorate(generateOne()));
+    const values = Array.from({ length: count }, () => decorate(generateOne(), decorations()));
     outputEl.textContent = values.join('\n');
 
     const unique = new Set(values).size;

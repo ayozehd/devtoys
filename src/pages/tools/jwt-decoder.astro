@@ -81,6 +81,15 @@ const SAMPLE =
 
 <script>
   import { $, esc, live } from '../../lib/dom';
+  import {
+    CLAIMS,
+    algorithmNote,
+    decodeJwt,
+    expiryStatus,
+    formatClaim,
+    normalizeToken,
+    type DecodedJwt,
+  } from '../../lib/jwt';
 
   const tokenEl = $<HTMLTextAreaElement>('#token');
   const errorEl = $('#error');
@@ -88,28 +97,6 @@ const SAMPLE =
   const coloredEl = $('#colored');
 
   const SAMPLE = $('#sample').dataset.sample ?? '';
-
-  const CLAIMS: Record<string, { name: string; meaning: string; time?: boolean }> = {
-    iss: { name: 'Issuer', meaning: 'Who created and signed this token.' },
-    sub: { name: 'Subject', meaning: 'Who the token is about — usually a user id.' },
-    aud: { name: 'Audience', meaning: 'Who the token is intended for.' },
-    exp: { name: 'Expires at', meaning: 'Must be rejected on or after this time.', time: true },
-    nbf: { name: 'Not before', meaning: 'Must be rejected before this time.', time: true },
-    iat: { name: 'Issued at', meaning: 'When the token was created.', time: true },
-    jti: { name: 'JWT ID', meaning: 'Unique identifier, used to prevent replay.' },
-    alg: { name: 'Algorithm', meaning: 'Signing algorithm used for the signature.' },
-    typ: { name: 'Type', meaning: 'Media type of the token — normally JWT.' },
-    kid: { name: 'Key ID', meaning: 'Which key from the key set signed this token.' },
-    scope: { name: 'Scope', meaning: 'Granted OAuth scopes.' },
-    azp: { name: 'Authorised party', meaning: 'The client the token was issued to.' },
-  };
-
-  function decodeSegment(segment: string): unknown {
-    const padded = segment.replace(/-/g, '+').replace(/_/g, '/');
-    const full = padded + '='.repeat((4 - (padded.length % 4)) % 4);
-    const bytes = Uint8Array.from(atob(full), (c) => c.charCodeAt(0));
-    return JSON.parse(new TextDecoder().decode(bytes));
-  }
 
   function fail(message: string) {
     tokenEl.classList.add('is-invalid');
@@ -130,18 +117,8 @@ const SAMPLE =
     coloredEl.innerHTML = '';
   }
 
-  function formatValue(key: string, value: unknown): string {
-    if (CLAIMS[key]?.time && typeof value === 'number') {
-      const date = new Date(value * 1000);
-      return `${value} — ${date.toLocaleString()} (${date.toISOString()})`;
-    }
-    if (Array.isArray(value)) return value.join(', ');
-    if (value && typeof value === 'object') return JSON.stringify(value);
-    return String(value);
-  }
-
   function run() {
-    const token = tokenEl.value.trim().replace(/^bearer\s+/i, '');
+    const token = normalizeToken(tokenEl.value);
 
     if (!token) {
       tokenEl.classList.remove('is-invalid');
@@ -152,29 +129,16 @@ const SAMPLE =
       return;
     }
 
-    const parts = token.split('.');
-    if (parts.length !== 3) {
+    let decoded: DecodedJwt;
+    try {
+      decoded = decodeJwt(token);
+    } catch (err) {
       reset();
-      fail(`A JWT has three dot-separated parts; this one has ${parts.length}.`);
+      fail((err as Error).message);
       return;
     }
 
-    let header: Record<string, unknown>;
-    let payload: Record<string, unknown>;
-    try {
-      header = decodeSegment(parts[0]) as Record<string, unknown>;
-    } catch {
-      reset();
-      fail('The header is not valid base64url-encoded JSON.');
-      return;
-    }
-    try {
-      payload = decodeSegment(parts[1]) as Record<string, unknown>;
-    } catch {
-      reset();
-      fail('The payload is not valid base64url-encoded JSON.');
-      return;
-    }
+    const { header, payload, parts } = decoded;
 
     tokenEl.classList.remove('is-invalid');
     errorEl.hidden = true;
@@ -187,34 +151,12 @@ const SAMPLE =
 
     $('#header-out').textContent = JSON.stringify(header, null, 2);
     $('#payload-out').textContent = JSON.stringify(payload, null, 2);
-    $('#signature-out').textContent = parts[2];
+    $('#signature-out').textContent = decoded.signature;
+    $('#alg-note').textContent = algorithmNote(header);
 
-    const alg = String(header.alg ?? 'unknown');
-    $('#alg-note').textContent =
-      alg === 'none'
-        ? 'alg is "none" — this token is unsigned and must never be trusted.'
-        : `Signed with ${alg}. Verification needs the issuer's secret or public key and is deliberately not done here.`;
-
-    const now = Math.floor(Date.now() / 1000);
-    const exp = typeof payload.exp === 'number' ? payload.exp : null;
-    const nbf = typeof payload.nbf === 'number' ? payload.nbf : null;
-    const expiry = $('#expiry');
-
-    if (exp === null) {
-      expiry.textContent = 'No expiry claim';
-      expiry.className = 'badge badge-attention';
-    } else if (exp < now) {
-      const ago = Math.round((now - exp) / 60);
-      expiry.textContent = `Expired ${ago < 60 ? `${ago} min` : `${Math.round(ago / 60)} h`} ago`;
-      expiry.className = 'badge badge-danger';
-    } else if (nbf !== null && nbf > now) {
-      expiry.textContent = 'Not valid yet';
-      expiry.className = 'badge badge-attention';
-    } else {
-      const mins = Math.round((exp - now) / 60);
-      expiry.textContent = `Valid for ${mins < 60 ? `${mins} min` : `${Math.round(mins / 60)} h`}`;
-      expiry.className = 'badge badge-success';
-    }
+    const expiry = expiryStatus(payload);
+    $('#expiry').textContent = expiry.label;
+    $('#expiry').className = `badge ${expiry.badge}`;
 
     const entries = [
       ...Object.entries(header).map(([k, v]) => [k, v, 'header'] as const),
@@ -228,7 +170,7 @@ const SAMPLE =
         return `<tr>
           <td class="mono"><strong>${esc(key)}</strong> <span class="badge badge-neutral">${where}</span></td>
           <td>${esc(meta?.name ?? '—')}</td>
-          <td class="mono val">${esc(formatValue(key, value))}</td>
+          <td class="mono val">${esc(formatClaim(key, value))}</td>
           <td class="dim">${esc(meta?.meaning ?? 'Custom claim.')}</td>
         </tr>`;
       })

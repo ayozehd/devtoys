@@ -44,21 +44,41 @@ SVG at build time by `src/lib/icons.ts` — no icon font, no runtime requests.
 
 ## Stack
 
-Astro 5 with zero UI frameworks. Each tool is a static page whose logic lives in a plain
-TypeScript `<script>` module, so a page only ships the code it needs. Shared logic sits in
-`src/lib/` (`color`, `cron`, `diff`, `emoji`, `dom` helpers). The only runtime dependencies
-are `marked` and `dompurify`, used by the Markdown and HTML tools.
+Astro 5 with zero UI frameworks. Each tool is a static page whose `<script>` module only
+wires the DOM — every piece of logic worth trusting lives in a plain TypeScript module
+under `src/lib/`, which is what the test suite exercises. The only runtime dependencies are
+`marked` and `dompurify`, used by the Markdown and HTML tools.
 
 ```text
 src/
 ├── components/    Icon, CopyButton, Sidebar
 ├── layouts/       BaseLayout (shell, theme, nav), ToolLayout
-├── lib/           tools registry + shared logic
+├── lib/           tools registry + one module per tool's logic
 ├── pages/
 │   ├── index.astro
-│   └── tools/     one page per tool
+│   └── tools/     one page per tool (DOM wiring only)
 └── styles/global.css
+tests/             one spec per lib module
 ```
+
+## Tests
+
+`npm test` runs 347 Vitest specs over `src/lib/` — the parsers, converters and generators
+behind every tool. Pages themselves are deliberately thin, so a green suite means the tool
+behaviour is intact.
+
+The specs pin down the things that are easy to break silently: UTF-8 round trips through
+every encoder, RFC 4180 quoting, the crontab "day-of-month **or** day-of-week" quirk, ISO
+week numbers at year boundaries, WCAG ratios and thresholds, LCS diff output and `diff -u`
+hunk headers, UUID version/variant bits, and the entropy penalties. `tests/registry.test.ts`
+also checks the registry against the filesystem: every tool has a page, every page is
+registered, and every RemixIcon name actually resolves.
+
+Dates are asserted in UTC (`vitest.config.ts` pins `TZ`), so the suite gives the same result
+on any machine. `npm run test:watch` reruns on save.
+
+Pushing to `main` runs `npm run check` and `npm test` before anything is built or published
+— see `.github/workflows/deploy.yml`.
 
 ## Commands
 
@@ -69,6 +89,8 @@ src/
 | `npm run build` | Build the static site to `./dist/` |
 | `npm run preview` | Preview the build locally |
 | `npm run check` | Type-check with `astro check` |
+| `npm test` | Run the unit tests once |
+| `npm run test:watch` | Run the unit tests in watch mode |
 
 ## Deployment
 
@@ -80,7 +102,11 @@ Pushing to `main` builds and publishes to GitHub Pages via
 
 1. Add an entry to `TOOLS` in `src/lib/tools.ts` (slug, name, description, category,
    keywords, and a RemixIcon name).
-2. Create `src/pages/tools/<slug>.astro` wrapped in `<ToolLayout slug="<slug>">`.
-3. Put the logic in a `<script>` block; import helpers from `src/lib/dom.ts`.
+2. Put the logic in `src/lib/<tool>.ts` as pure functions, and cover it in
+   `tests/<tool>.test.ts`.
+3. Create `src/pages/tools/<slug>.astro` wrapped in `<ToolLayout slug="<slug>">`, with a
+   `<script>` block that only reads inputs, calls the module and writes the DOM. Import
+   helpers from `src/lib/dom.ts`.
 
-The sidebar, home page and search pick the tool up from the registry automatically.
+The sidebar, home page and search pick the tool up from the registry automatically, and
+`tests/registry.test.ts` fails if the entry and the page ever drift apart.

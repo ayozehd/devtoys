@@ -85,17 +85,14 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
 
 <script>
   import { $, esc, live } from '../../lib/dom';
+  import { WHITE, contrastRatio, parseColor, rgbToHex, type RGB } from '../../lib/color';
   import {
-    BLACK,
-    WHITE,
-    contrastRatio,
-    hslToRgb,
-    mix,
-    parseColor,
-    rgbToHex,
-    rgbToHsl,
-    type RGB,
-  } from '../../lib/color';
+    THRESHOLDS,
+    findPassing,
+    ratioBadge,
+    suggestions,
+    verdicts,
+  } from '../../lib/contrast';
 
   const fgEl = $<HTMLInputElement>('#fg');
   const bgEl = $<HTMLInputElement>('#bg');
@@ -107,62 +104,18 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
   let fg: RGB = { r: 89, g: 99, b: 110, a: 1 };
   let bg: RGB = WHITE;
 
-  const THRESHOLDS: { label: string; aa: number; aaa: number }[] = [
-    { label: 'Body text (< 18.66px bold / < 24px)', aa: 4.5, aaa: 7 },
-    { label: 'Large text (≥ 18.66px bold / ≥ 24px)', aa: 3, aaa: 4.5 },
-    { label: 'UI components & graphics', aa: 3, aaa: 3 },
-  ];
 
-  function badge(ratio: number, threshold: number, label: string) {
-    const pass = ratio >= threshold;
-    return `<span class="badge ${pass ? 'badge-success' : 'badge-danger'}">${pass ? '✓' : '✕'} ${label} ${threshold}:1</span>`;
-  }
-
-  /** Walks lightness up and down until the pair clears `target`. */
-  function findPassing(color: RGB, against: RGB, target = 4.5): RGB {
-    const hsl = rgbToHsl(color);
-    let best = color;
-    let bestRatio = contrastRatio(color, against);
-
-    for (let step = 1; step <= 100; step++) {
-      for (const direction of [-1, 1]) {
-        const l = hsl.l + direction * step;
-        if (l < 0 || l > 100) continue;
-        const candidate = hslToRgb({ ...hsl, l });
-        const ratio = contrastRatio(candidate, against);
-        if (ratio >= target) return candidate;
-        if (ratio > bestRatio) {
-          bestRatio = ratio;
-          best = candidate;
-        }
-      }
-    }
-    return best;
-  }
-
-  function renderSuggestions(ratio: number) {
-    const options: { label: string; fg: RGB; bg: RGB }[] = [
-      { label: 'Darkened text', fg: findPassing(fg, bg, 4.5), bg },
-      { label: 'Lightened background', fg, bg: findPassing(bg, fg, 4.5) },
-      { label: 'AAA text', fg: findPassing(fg, bg, 7), bg },
-      { label: 'Black on background', fg: BLACK, bg },
-      { label: 'White on foreground', fg: WHITE, bg: fg },
-      { label: 'Tinted surface', fg, bg: mix(bg, fg, 0.08) },
-    ];
-
-    $('#suggestions').innerHTML = options
+  function renderSuggestions() {
+    $('#suggestions').innerHTML = suggestions(fg, bg)
       .map(({ label, fg: f, bg: b }) => {
         const r = contrastRatio(f, b);
-        const cls = r >= 7 ? 'badge-success' : r >= 4.5 ? 'badge-accent' : r >= 3 ? 'badge-attention' : 'badge-danger';
         return `<button type="button" class="suggestion" data-fg="${rgbToHex(f)}" data-bg="${rgbToHex(b)}" style="background:${rgbToHex(b)};color:${rgbToHex(f)}">
           <span class="s-title">${esc(label)}</span>
           <span class="s-demo">Aa — sample text</span>
-          <span class="s-meta"><span class="badge ${cls}">${r.toFixed(2)}:1</span> <code>${rgbToHex(f).toUpperCase()} on ${rgbToHex(b).toUpperCase()}</code></span>
+          <span class="s-meta"><span class="badge ${ratioBadge(r)}">${r.toFixed(2)}:1</span> <code>${rgbToHex(f).toUpperCase()} on ${rgbToHex(b).toUpperCase()}</code></span>
         </button>`;
       })
       .join('');
-
-    void ratio;
   }
 
   function render() {
@@ -175,12 +128,12 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
     box.style.background = bgHex;
     box.style.color = fgHex;
 
-    $('#verdicts').innerHTML = [
-      badge(ratio, 4.5, 'AA'),
-      badge(ratio, 3, 'AA large'),
-      badge(ratio, 7, 'AAA'),
-      badge(ratio, 4.5, 'AAA large'),
-    ].join('');
+    $('#verdicts').innerHTML = verdicts(ratio)
+      .map(
+        (v) =>
+          `<span class="badge ${v.pass ? 'badge-success' : 'badge-danger'}">${v.pass ? '✓' : '✕'} ${v.label} ${v.threshold}:1</span>`,
+      )
+      .join('');
 
     previewEl.style.background = bgHex;
     previewEl.style.color = fgHex;
@@ -196,7 +149,7 @@ import ToolLayout from '../../layouts/ToolLayout.astro';
       return `<tr><td>${esc(label)}</td>${cell(aa)}${cell(aaa)}</tr>`;
     }).join('');
 
-    renderSuggestions(ratio);
+    renderSuggestions();
   }
 
   function setColor(which: 'fg' | 'bg', value: string, from: 'picker' | 'text') {

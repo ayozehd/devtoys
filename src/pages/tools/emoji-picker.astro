@@ -86,32 +86,15 @@ import { GLYPHS, GROUPS } from '../../lib/emoji';
 
 <script>
   import { $, $$, copyText, esc, flashButton, store } from '../../lib/dom';
+  import { codePoints, formatGlyph, type GlyphFormat } from '../../lib/emoji';
 
   const searchEl = $<HTMLInputElement>('#search');
   const gridEl = $('#grid');
   const emptyEl = $('#empty');
   const recentStore = store('emoji-recent');
 
-  let format = 'char';
+  let format: GlyphFormat = 'char';
   let group = '';
-
-  const codePoints = (char: string) =>
-    [...char].map((c) => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`);
-
-  function formatted(char: string): string {
-    switch (format) {
-      case 'codepoint':
-        return codePoints(char).join(' ');
-      case 'entity':
-        return [...char].map((c) => `&#${c.codePointAt(0)};`).join('');
-      case 'js':
-        return [...char].map((c) => `\\u{${c.codePointAt(0)!.toString(16)}}`).join('');
-      case 'css':
-        return [...char].map((c) => `\\${c.codePointAt(0)!.toString(16)}`).join('');
-      default:
-        return char;
-    }
-  }
 
   function filter() {
     const q = searchEl.value.trim().toLowerCase();
@@ -169,7 +152,7 @@ import { GLYPHS, GROUPS } from '../../lib/emoji';
   async function pick(btn: HTMLElement) {
     const char = btn.dataset.char ?? '';
     if (!char) return;
-    const ok = await copyText(formatted(char));
+    const ok = await copyText(formatGlyph(char, format));
     btn.classList.add('copied-glyph');
     window.setTimeout(() => btn.classList.remove('copied-glyph'), 700);
     showDetail(char, btn.title || char);
@@ -198,7 +181,7 @@ import { GLYPHS, GROUPS } from '../../lib/emoji';
     const btn = (event.target as HTMLElement).closest('button');
     if (!btn) return;
     $$('#format button').forEach((b) => b.setAttribute('aria-selected', String(b === btn)));
-    format = btn.dataset.value ?? 'char';
+    format = (btn.dataset.value ?? 'char') as GlyphFormat;
   });
 
   $('#clear-recent').addEventListener('click', (event) => {

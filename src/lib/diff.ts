@@ -109,3 +109,102 @@ function core<T>(ka: string[], kb: string[], a: T[], b: T[], offset: number): Op
 export function tokenize(line: string): string[] {
   return line.match(/\s+|\w+|[^\s\w]/g) ?? [];
 }
+
+/* -------------------------------------------------------------------------- */
+/* Presentation                                                                */
+/* -------------------------------------------------------------------------- */
+
+export interface Row {
+  left: string | null;
+  right: string | null;
+  leftNo: number | null;
+  rightNo: number | null;
+  kind: 'equal' | 'change' | 'del' | 'ins';
+}
+
+/** Pairs runs of deletions with insertions so they sit on the same row. */
+export function pairRows(ops: Op<string>[]): Row[] {
+  const rows: Row[] = [];
+  let i = 0;
+
+  while (i < ops.length) {
+    const op = ops[i];
+    if (op.type === 'equal') {
+      rows.push({
+        left: op.value,
+        right: op.value,
+        leftNo: op.a + 1,
+        rightNo: op.b + 1,
+        kind: 'equal',
+      });
+      i++;
+      continue;
+    }
+
+    const dels: Op<string>[] = [];
+    const ins: Op<string>[] = [];
+    while (i < ops.length && ops[i].type === 'del') dels.push(ops[i++]);
+    while (i < ops.length && ops[i].type === 'ins') ins.push(ops[i++]);
+
+    const max = Math.max(dels.length, ins.length);
+    for (let k = 0; k < max; k++) {
+      const d = dels[k];
+      const n = ins[k];
+      rows.push({
+        left: d ? d.value : null,
+        right: n ? n.value : null,
+        leftNo: d ? d.a + 1 : null,
+        rightNo: n ? n.b + 1 : null,
+        kind: d && n ? 'change' : d ? 'del' : 'ins',
+      });
+    }
+  }
+  return rows;
+}
+
+/** Unified diff text with N lines of context, close enough to `diff -u`. */
+export function unifiedPatch(ops: Op<string>[], context = 3): string {
+  const keep = new Set<number>();
+  ops.forEach((op, i) => {
+    if (op.type === 'equal') return;
+    for (let k = Math.max(0, i - context); k <= Math.min(ops.length - 1, i + context); k++) {
+      keep.add(k);
+    }
+  });
+
+  const lines: string[] = ['--- original', '+++ changed'];
+  let i = 0;
+  while (i < ops.length) {
+    if (!keep.has(i)) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < ops.length && keep.has(j)) j++;
+    const chunk = ops.slice(i, j);
+    const aStart = chunk.find((o) => o.a >= 0)?.a ?? 0;
+    const bStart = chunk.find((o) => o.b >= 0)?.b ?? 0;
+    const aLen = chunk.filter((o) => o.type !== 'ins').length;
+    const bLen = chunk.filter((o) => o.type !== 'del').length;
+    lines.push(`@@ -${aStart + 1},${aLen} +${bStart + 1},${bLen} @@`);
+    for (const op of chunk) {
+      lines.push(`${op.type === 'del' ? '-' : op.type === 'ins' ? '+' : ' '}${op.value}`);
+    }
+    i = j;
+  }
+  return lines.length > 2 ? lines.join('\n') : 'No differences.';
+}
+
+export interface DiffCounts {
+  added: number;
+  removed: number;
+  unchanged: number;
+}
+
+export function counts(ops: Op<string>[]): DiffCounts {
+  return {
+    added: ops.filter((o) => o.type === 'ins').length,
+    removed: ops.filter((o) => o.type === 'del').length,
+    unchanged: ops.filter((o) => o.type === 'equal').length,
+  };
+}
